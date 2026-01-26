@@ -1,0 +1,28 @@
+pandas
+numpy
+python-dateutil
+
+# Web
+fastapi
+uvicorn
+
+# UI
+streamlit
+
+# Visualization
+plotly
+
+openai
+python-dotenv
+lifetimes
+scipy
+lifelines
+
+# LangChain
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-openai>=0.0.5
+langchain-community>=0.0.20
+
+# LangGraph
+langgraph>=0.2.0

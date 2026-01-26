@@ -1,0 +1,139 @@
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment
+.env
+.env.local
+.env.*.local
+.envrc
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Temporary files
+*.tmp
+*.temp
+
+# Python - Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[codz]
+*$py.class
+*.so
+
+# Python - Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Python - Virtual environments (root level)
+venv/
+.venv
+env/
+ENV/
+env.bak/
+venv.bak/
+.pixi
+__pypackages__/
+
+# Python - Testing
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py.cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Python - Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# Python - Other
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+*.sage.py
+.spyderproject
+.spyproject
+.ropeproject
+/site
+cython_debug/
+.ruff_cache/
+.pypirc
+.cursorignore
+.cursorindexingignore
+.pdm-python
+.pdm-build/
+.abstra/
+marimo/_static/
+marimo/_lsp/
+__marimo__/
+
+# Node.js - Dependencies
+node_modules/
+package-lock.json
+bun.lockb
+yarn.lock
+pnpm-lock.yaml
+
+# Node.js - Build outputs
+dist/
+dist-ssr/
+*.local
+
+# Backend specific
+backend/data/*.csv
+backend/data/retail.sqlite
+
+# Frontend specific
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
