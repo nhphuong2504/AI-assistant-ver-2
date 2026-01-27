@@ -1,9 +1,13 @@
+import os
 import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-DB_PATH = Path("data/retail.sqlite")
+# Get database path from environment variable or use default
+# Path is relative to backend directory (where this file is located)
+_default_db_path = Path(__file__).parent.parent / "data" / "retail.sqlite"
+DB_PATH = Path(os.getenv("DATABASE_PATH", str(_default_db_path)))
 
 # Block anything that's not read-only. This is conservative on purpose.
 FORBIDDEN = re.compile(
@@ -16,8 +20,16 @@ MULTI_STMT = re.compile(r";\s*\S", re.DOTALL)  # semicolon with more text after 
 
 def get_conn() -> sqlite3.Connection:
     if not DB_PATH.exists():
-        raise FileNotFoundError(f"Database not found at {DB_PATH.resolve()}")
-    conn = sqlite3.connect(DB_PATH)
+        resolved_path = DB_PATH.resolve()
+        error_msg = (
+            f"Database not found at {resolved_path}\n"
+            f"Please ensure the database file exists. You can generate it by running:\n"
+            f"  cd backend\n"
+            f"  python etl/load_online_retail.py\n"
+            f"Or set DATABASE_PATH environment variable to point to your database file."
+        )
+        raise FileNotFoundError(error_msg)
+    conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
 

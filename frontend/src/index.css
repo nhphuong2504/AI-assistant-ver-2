@@ -38,7 +38,7 @@
 
     /* Chat-specific tokens */
     --chat-user-bg: 222 47% 20%;
-    --chat-user-fg: 210 40% 98%;
+    --chat-user-fg: 0 0% 100%;
     --chat-assistant-bg: 0 0% 100%;
     --chat-assistant-fg: 222 47% 11%;
     --chat-header-bg: 222 47% 15%;

@@ -1,4 +1,4 @@
-# AI Assistant - Retail Data Chat Application
+# AI analyst - Retail Data Chat Application
 
 A full-stack monorepo application combining a FastAPI backend with a React frontend for AI-powered retail data analysis and chat interactions.
 
@@ -56,7 +56,30 @@ assistant/
      DATABASE_PATH=backend/data/retail.sqlite
      ```
 
-3. **Start the backend server:**
+3. **Generate the database:**
+   The `retail.sqlite` database file is not included in the repository. You need to generate it from the CSV data:
+   
+   **Windows:**
+   ```bash
+   cd backend
+   ..\venv\Scripts\python etl\load_online_retail.py
+   ```
+   
+   **Linux/Mac:**
+   ```bash
+   cd backend
+   ../venv/bin/python etl/load_online_retail.py
+   ```
+   
+   This script will:
+   - Read the CSV file from `backend/data/raw/online_retail.csv`
+   - Clean and process the data
+   - Create `backend/data/retail.sqlite` with two tables:
+     - `transactions_all` - All raw transactions with data quality flags
+     - `transactions` - Clean transactions for analytics (excludes cancellations, returns, invalid data)
+   - Create indexes for optimal query performance
+
+4. **Start the backend server:**
    ```bash
    start-backend.bat
    ```
@@ -141,6 +164,24 @@ See `backend/app/main.py` for the complete API documentation.
 ### Backend Development
 
 The backend uses FastAPI with auto-reload enabled. Changes to Python files will automatically restart the server.
+
+### Database Setup
+
+If you need to regenerate the `retail.sqlite` database (e.g., after modifying the ETL script or CSV data):
+
+**Windows:**
+```bash
+cd backend
+..\venv\Scripts\python etl\load_online_retail.py
+```
+
+**Linux/Mac:**
+```bash
+cd backend
+../venv/bin/python etl/load_online_retail.py
+```
+
+**Note:** The database file (`backend/data/retail.sqlite`) is excluded from version control via `.gitignore`. Each developer needs to generate it locally using the ETL script.
 
 ### Frontend Development
 

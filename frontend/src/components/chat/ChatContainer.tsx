@@ -3,6 +3,9 @@ import { MessageSquare } from "lucide-react";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { askQuestion } from "@/lib/api";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 
 interface Message {
   id: string;
@@ -14,11 +17,12 @@ export function ChatContainer() {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
-      content: "Hello! I'm your business assistant. How can I help you today?",
+      content: "Hi, I analyze your customer data to support growth and retention decisions. Today is December 9th, 2011. What can I help you with?",
       role: "assistant",
     },
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [useMemory, setUseMemory] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -39,7 +43,7 @@ export function ChatContainer() {
     setIsLoading(true);
 
     try {
-      const answer = await askQuestion(content);
+      const answer = await askQuestion(content, useMemory);
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         content: answer,
@@ -61,13 +65,26 @@ export function ChatContainer() {
   return (
     <div className="flex flex-col h-full bg-background rounded-2xl shadow-chat overflow-hidden border border-border">
       {/* Header */}
-      <div className="flex items-center gap-3 px-5 py-4 bg-chat-header-bg">
-        <div className="w-10 h-10 rounded-full bg-accent flex items-center justify-center">
-          <MessageSquare className="w-5 h-5 text-accent-foreground" />
+      <div className="flex items-center justify-between px-5 py-4 bg-chat-header-bg">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-accent flex items-center justify-center">
+            <MessageSquare className="w-5 h-5 text-accent-foreground" />
+          </div>
+          <div>
+            <h1 className="font-semibold text-primary-foreground">AI analyst</h1>
+            <p className="text-xs text-primary-foreground/70">For customer growth and retention</p>
+          </div>
         </div>
-        <div>
-          <h1 className="font-semibold text-primary-foreground">Business Assistant</h1>
-          <p className="text-xs text-primary-foreground/70">Always here to help</p>
+        <div className="flex items-center gap-2">
+          <Label htmlFor="memory-toggle" className="text-xs text-primary-foreground/70 cursor-pointer">
+            Use memory
+          </Label>
+          <Switch
+            id="memory-toggle"
+            checked={useMemory}
+            onCheckedChange={setUseMemory}
+            disabled={isLoading}
+          />
         </div>
       </div>
 
@@ -78,6 +95,46 @@ export function ChatContainer() {
         ))}
         {isLoading && (
           <ChatMessage content="" role="assistant" isTyping={true} />
+        )}
+        {/* Example Prompts - Show only when there's only the welcome message */}
+        {messages.length === 1 && !isLoading && (
+          <div className="space-y-2 mt-4">
+            <p className="text-xs text-muted-foreground mb-3">Try asking:</p>
+            <div className="grid grid-cols-1 gap-2">
+              <Button
+                variant="outline"
+                className="justify-start text-left h-auto py-3 px-4 text-sm font-normal hover:bg-accent hover:text-accent-foreground"
+                onClick={() => handleSend("What were the top 10 products by revenue on November 2011?")}
+                disabled={isLoading}
+              >
+                What were the top 10 products by revenue on November 2011?
+              </Button>
+              <Button
+                variant="outline"
+                className="justify-start text-left h-auto py-3 px-4 text-sm font-normal hover:bg-accent hover:text-accent-foreground"
+                onClick={() => handleSend("Which customers are currently at the highest risk of churning?")}
+                disabled={isLoading}
+              >
+                Which customers are currently at the highest risk of churning?
+              </Button>
+              <Button
+                variant="outline"
+                className="justify-start text-left h-auto py-3 px-4 text-sm font-normal hover:bg-accent hover:text-accent-foreground"
+                onClick={() => handleSend("Show me the top 10 customers by predicted CLV.")}
+                disabled={isLoading}
+              >
+                Show me the top 10 customers by predicted CLV.
+              </Button>
+              <Button
+                variant="outline"
+                className="justify-start text-left h-auto py-3 px-4 text-sm font-normal hover:bg-accent hover:text-accent-foreground"
+                onClick={() => handleSend("Segment our user base and suggest retention actions for each group.")}
+                disabled={isLoading}
+              >
+                Segment our user base and suggest retention actions for each group.
+              </Button>
+            </div>
+          </div>
         )}
         <div ref={messagesEndRef} />
       </div>
