@@ -51,7 +51,7 @@ print("\nFitting Cox model with covariates: n_orders, log_monetary_value, produc
 result = fit_cox_baseline(
     covariates=cov,
     covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-    train_frac=0.8,
+    train_frac=1.0,
     random_state=42,
     penalizer=0.1,
 )

@@ -227,7 +227,7 @@ def split_train_validation(
 def fit_cox_baseline(
     covariates: pd.DataFrame,
     covariate_cols: List[str] = None,
-    train_frac: float = 0.8,
+    train_frac: float = 1.0,
     random_state: int = 42,
     penalizer: float = 0.1,
 ) -> Dict[str, Any]:
@@ -236,7 +236,7 @@ def fit_cox_baseline(
     
     Steps:
     1. Drop rows with missing values in selected covariates
-    2. Split data into train/validation sets (80/20)
+    2. If train_frac < 1, split into train/validation; otherwise use all data for training
     3. Fit Cox model on training data
     4. Generate summary with interpretation
     
@@ -244,8 +244,9 @@ def fit_cox_baseline(
         covariates: DataFrame from build_covariate_table
         covariate_cols: List of covariate column names. 
                        Default: ['n_orders', 'log_product_diversity']
-        train_frac: Fraction for training (default: 0.8)
-        random_state: Random seed for split
+        train_frac: Fraction for training (default: 1.0 = use all data). Use < 1 (e.g. 0.8)
+                    only when a held-out validation set is needed (e.g. for validate_cox_model).
+        random_state: Random seed for split (used only when train_frac < 1)
         penalizer: L2 penalizer for Cox model (default: 0.1)
     
     Returns:
@@ -912,7 +913,8 @@ def expected_remaining_lifetime(
         model: Fitted CoxPHFitter model (must NOT be refit)
         covariates_df: DataFrame with customer_id, duration (or tenure_days), event, and all Cox covariates
         H_days: Horizon in days for restricted expectation (default: 365)
-        inactivity_days: Inactivity days threshold (used for validation, default: 90)
+        inactivity_days: Unused; reserved for API consistency with predict_churn_probability.
+            Churn definition is already embedded in covariates_df (event, duration).
     
     Returns:
         DataFrame with columns:

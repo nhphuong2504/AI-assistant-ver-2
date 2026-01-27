@@ -208,7 +208,7 @@ def execute_analytics_function(
         cox_result = fit_cox_baseline(
             covariates=cov,
             covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-            train_frac=0.8,
+            train_frac=1.0,
             random_state=42,
             penalizer=0.1,
         )
@@ -249,7 +249,7 @@ def execute_analytics_function(
         cox_result = fit_cox_baseline(
             covariates=cov,
             covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-            train_frac=0.8,
+            train_frac=1.0,
             random_state=42,
             penalizer=0.1,
         )
@@ -293,7 +293,7 @@ def execute_analytics_function(
         cox_result = fit_cox_baseline(
             covariates=cov,
             covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-            train_frac=0.8,
+            train_frac=1.0,
             random_state=42,
             penalizer=0.1,
         )
@@ -335,7 +335,7 @@ def execute_analytics_function(
         cox_result = fit_cox_baseline(
             covariates=cov,
             covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-            train_frac=0.8,
+            train_frac=1.0,
             random_state=42,
             penalizer=0.1,
         )
@@ -507,7 +507,7 @@ def score_customers_endpoint(
     cox_result = fit_cox_baseline(
         covariates=cov,
         covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-        train_frac=0.8,
+        train_frac=1.0,
         random_state=42,
         penalizer=0.1,
     )
@@ -566,7 +566,7 @@ def churn_probability_endpoint(
     cox_result = fit_cox_baseline(
         covariates=cov,
         covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-        train_frac=0.8,
+        train_frac=1.0,
         random_state=42,
         penalizer=0.1,
     )
@@ -630,7 +630,7 @@ def expected_lifetime_endpoint(
     cox_result = fit_cox_baseline(
         covariates=cov,
         covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-        train_frac=0.8,
+        train_frac=1.0,
         random_state=42,
         penalizer=0.1,
     )
@@ -692,7 +692,7 @@ def segmentation_endpoint(
     cox_result = fit_cox_baseline(
         covariates=cov,
         covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-        train_frac=0.8,
+        train_frac=1.0,
         random_state=42,
         penalizer=0.1,
     )

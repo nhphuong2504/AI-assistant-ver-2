@@ -31,10 +31,6 @@ from app.db import run_query, run_query_internal, get_schema, ensure_select_only
 
 load_dotenv()
 
-# Fixed constants
-FIXED_CUTOFF_DATE = "2011-12-09"
-FIXED_INACTIVITY_DAYS = 90
-
 # Global transactions cache
 _transactions_cache = None
 
@@ -114,13 +110,17 @@ def get_or_fit_cox_model(transactions_df: pd.DataFrame, cutoff_date: str, inacti
     cox_result = fit_cox_baseline(
         covariates=cov,
         covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-        train_frac=0.8,
+        train_frac=1.0,
         random_state=42,
         penalizer=0.1,
     )
     
     # Cache the model
     cache_cox_model(cache_key, cox_result['model'])
+    
+    # Use full covariate table as train_df so downstream (expected_remaining_lifetime,
+    # build_segmentation_table) get customer_id, tenure_days, monetary_value, etc.
+    cox_result['train_df'] = cov
     
     return cox_result
 
@@ -234,11 +234,11 @@ def filter_by_customer_ids(df: pd.DataFrame, customer_id: Optional[Union[int, st
 
 
 @tool
-def predict_clv_tool(horizon_days: int = 90, limit_customers: int = 10, customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Predict Customer Lifetime Value (CLV) using BG/NBD and Gamma-Gamma models. Use this for questions about: customer lifetime value, CLV, future customer value, predicted revenue per customer, customer worth, or which customers are most valuable. Calibration cutoff date is fixed at 2011-12-09. Parameters: horizon_days (default: 90), limit_customers (default: 10), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N customers (default behavior)."""
+def predict_clv_tool(horizon_days: int = 90, limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
+    """Predict Customer Lifetime Value (CLV) using BG/NBD and Gamma-Gamma models. Use this for questions about: customer lifetime value, CLV, future customer value, predicted revenue per customer, customer worth, or which customers are most valuable. Calibration cutoff date is fixed at 2011-12-09. Parameters: horizon_days (default: 90), limit_customers (default: 10), order (default: "descending"; use "ascending" for lowest/least valuable CLV), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by CLV: descending = highest CLV first; ascending = lowest CLV first."""
     try:
         transactions_df = get_transactions_df()
-        cutoff_date = FIXED_CUTOFF_DATE
+        cutoff_date = CUTOFF_DATE
         
         # Suppress RuntimeWarning about invalid value encountered in log
         # This is a known issue with the lifetimes library when processing edge cases
@@ -280,8 +280,8 @@ def predict_clv_tool(horizon_days: int = 90, limit_customers: int = 10, customer
             else:
                 warning = None
         else:
-            # Default behavior: top N customers
-            pred = pred.sort_values("clv", ascending=False).head(limit_customers)
+            # Default behavior: top N customers (order: descending=highest first, ascending=lowest first)
+            pred = pred.sort_values("clv", ascending=(order == "ascending"), na_position="last").head(limit_customers)
             found_ids = []
             not_found_ids = []
             warning = None
@@ -311,12 +311,12 @@ def predict_clv_tool(horizon_days: int = 90, limit_customers: int = 10, customer
 
 
 @tool
-def score_churn_risk_tool(question: str = "", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Rank and score customers by relative churn risk (risk_score, risk_rank, risk_bucket: High/Medium/Low). Returns RISK SCORES for ranking/prioritization, NOT probabilities. Use this for: ranking customers by risk, identifying high-risk customers, risk-based prioritization, or which customers need attention first. Returns risk_score (higher = higher risk), risk_rank, risk_percentile, and risk_bucket. Parameters: customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns scores only for those customers. If not provided, returns top 25 high-risk customers (default behavior). Do NOT use for probability questions."""
+def score_churn_risk_tool(limit_customers: int = 25, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
+    """Rank and score customers by relative churn risk (risk_score, risk_rank, risk_bucket: High/Medium/Low). Returns RISK SCORES for ranking/prioritization, NOT probabilities. Use this for: ranking customers by risk, identifying high-risk customers, risk-based prioritization, or which customers need attention first. Returns risk_score (higher = higher risk), risk_rank, risk_percentile, and risk_bucket. Parameters: limit_customers (default: 25), order (default: "descending"; use "ascending" for lowest/safest risk), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns scores only for those customers. If not provided, returns top N by risk: descending = highest risk first; ascending = lowest risk first. Do NOT use for probability questions."""
     try:
         transactions_df = get_transactions_df()
-        cutoff_date = FIXED_CUTOFF_DATE
-        inactivity_days = FIXED_INACTIVITY_DAYS
+        cutoff_date = CUTOFF_DATE
+        inactivity_days = INACTIVITY_DAYS
         
         cox_result = get_or_fit_cox_model(transactions_df, cutoff_date, inactivity_days)
         
@@ -342,12 +342,12 @@ def score_churn_risk_tool(question: str = "", customer_id: Optional[Union[int, s
             else:
                 warning = None
         else:
-            # Default behavior: top 10 high-risk
-            scored = scored.head(10)
+            # Default behavior: top N by risk (order: descending=highest risk first, ascending=lowest/safest first)
+            scored = scored.sort_values("risk_score", ascending=(order == "ascending")).head(limit_customers)
             found_ids = []
             not_found_ids = []
             warning = None
-        
+
         high_risk = (scored["risk_bucket"] == "High").sum()
         medium_risk = (scored["risk_bucket"] == "Medium").sum()
         low_risk = (scored["risk_bucket"] == "Low").sum()
@@ -376,12 +376,12 @@ def score_churn_risk_tool(question: str = "", customer_id: Optional[Union[int, s
 
 
 @tool
-def predict_churn_probability_tool(X_days: int = 90, customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Predict the PROBABILITY (0-1) that active customers will churn in the next X days. Returns actual churn probabilities, not risk scores. Use this for: 'what is the probability customer X will churn in 90 days?', 'likelihood of churn', 'churn probability', or 'probability of leaving in X days'. Returns churn_probability (0.0 to 1.0), survival_at_t0, and survival_at_t0_plus_X. Parameters: X_days (default: 90), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top 25 highest probability customers (default behavior). Do NOT use for risk ranking or lifetime questions."""
+def predict_churn_probability_tool(X_days: int = 90, limit_customers: int = 25, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
+    """Predict the PROBABILITY (0-1) that active customers will churn in the next X days. Returns actual churn probabilities, not risk scores. Use this for: 'what is the probability customer X will churn in 90 days?', 'likelihood of churn', 'churn probability', or 'probability of leaving in X days'. Returns churn_probability (0.0 to 1.0), survival_at_t0, and survival_at_t0_plus_X. Parameters: X_days (default: 90), limit_customers (default: 25), order (default: "descending"; use "ascending" for lowest/least likely to churn), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by churn probability: descending = highest first; ascending = lowest first. Do NOT use for risk ranking or lifetime questions."""
     try:
         transactions_df = get_transactions_df()
-        cutoff_date = FIXED_CUTOFF_DATE
-        inactivity_days = FIXED_INACTIVITY_DAYS
+        cutoff_date = CUTOFF_DATE
+        inactivity_days = INACTIVITY_DAYS
         
         cox_result = get_or_fit_cox_model(transactions_df, cutoff_date, inactivity_days)
         
@@ -409,12 +409,12 @@ def predict_churn_probability_tool(X_days: int = 90, customer_id: Optional[Union
             else:
                 warning = None
         else:
-            # Default behavior: top 10 highest probability
-            predictions = predictions.head(10)
+            # Default behavior: top N by churn probability (order: descending=highest first, ascending=lowest first)
+            predictions = predictions.sort_values("churn_probability", ascending=(order == "ascending")).head(limit_customers)
             found_ids = []
             not_found_ids = []
             warning = None
-        
+
         result = {
             "status": "success",
             "total_customers": len(predictions),
@@ -441,12 +441,12 @@ def predict_churn_probability_tool(X_days: int = 90, customer_id: Optional[Union
 
 
 @tool
-def expected_remaining_lifetime_tool(H_days: int = 365, customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Compute EXPECTED REMAINING LIFETIME in days for active customers (how long they will stay). Returns expected_remaining_life_days (number of days), NOT probabilities or risk scores. Use this for: 'how long will customer X stay?', 'expected remaining lifetime', 'customer lifetime expectancy', 'how many days until churn', or 'remaining customer duration'. Returns expected_remaining_life_days (numeric days), t0 (current tenure), and H_days (horizon). Parameters: H_days (default: 365), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top 25 longest lifetime customers (default behavior). Do NOT use for probability or risk ranking questions."""
+def expected_remaining_lifetime_tool(H_days: int = 365, limit_customers: int = 25, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
+    """Compute EXPECTED REMAINING LIFETIME in days for active customers (how long they will stay). Returns expected_remaining_life_days (number of days), NOT probabilities or risk scores. Use this for: 'how long will customer X stay?', 'expected remaining lifetime', 'customer lifetime expectancy', 'how many days until churn', or 'remaining customer duration'. Returns expected_remaining_life_days (numeric days), t0 (current tenure), and H_days (horizon). Parameters: H_days (default: 365), limit_customers (default: 25), order (default: "descending"; use "ascending" for shortest/least remaining lifetime), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by expected remaining life: descending = longest first; ascending = shortest first. Do NOT use for probability or risk ranking questions."""
     try:
         transactions_df = get_transactions_df()
-        cutoff_date = FIXED_CUTOFF_DATE
-        inactivity_days = FIXED_INACTIVITY_DAYS
+        cutoff_date = CUTOFF_DATE
+        inactivity_days = INACTIVITY_DAYS
         
         cox_result = get_or_fit_cox_model(transactions_df, cutoff_date, inactivity_days)
         
@@ -473,12 +473,12 @@ def expected_remaining_lifetime_tool(H_days: int = 365, customer_id: Optional[Un
             else:
                 warning = None
         else:
-            # Default behavior: top 10 longest lifetime
-            expected_lifetimes = expected_lifetimes.head(10)
+            # Default behavior: top N by expected remaining life (order: descending=longest first, ascending=shortest first)
+            expected_lifetimes = expected_lifetimes.sort_values("expected_remaining_life_days", ascending=(order == "ascending")).head(limit_customers)
             found_ids = []
             not_found_ids = []
             warning = None
-        
+
         result = {
             "status": "success",
             "total_customers": len(expected_lifetimes),
@@ -509,8 +509,8 @@ def customer_segmentation_tool(H_days: int = 365, customer_id: Optional[Union[in
     """Build comprehensive customer segmentation combining RISK LABELS (High/Medium/Low from churn risk) and EXPECTED REMAINING LIFETIME buckets (Short/Medium/Long). Returns 9 segments (e.g., 'High-Long', 'Medium-Medium', 'Low-Short') with action tags and recommended actions. Use this for: customer segmentation, segment analysis, action recommendations, customer groups by risk and lifetime, strategic customer management, or which actions to take for different customer types. Parameters: H_days (default: 365), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns segmentation only for those customers. If not provided, returns all customers with samples per segment (default behavior). This is a COMPREHENSIVE segmentation that combines both risk and lifetime - do NOT use for individual risk scores, probabilities, or lifetime values alone."""
     try:
         transactions_df = get_transactions_df()
-        cutoff_date = FIXED_CUTOFF_DATE
-        inactivity_days = FIXED_INACTIVITY_DAYS
+        cutoff_date = CUTOFF_DATE
+        inactivity_days = INACTIVITY_DAYS
         
         cox_result = get_or_fit_cox_model(transactions_df, cutoff_date, inactivity_days)
         
@@ -655,6 +655,8 @@ except Exception as e:
 SYSTEM_PROMPT = f"""You are a data assistant for an Online Retail SQLite database.
 You can answer questions using either SQL queries or specialized analytics functions.
 
+ASSUME today's date is December 9th, 2011. All data, analytics (CLV, churn risk, expected lifetime, segmentation), and cutoff dates are as of this date. Use it when interpreting relative time (e.g. "this month", "last quarter", "recent", "current") or when the user asks about "today" or "now".
+
 DATABASE SCHEMA:
 {SCHEMA_JSON}
 
@@ -702,6 +704,14 @@ TOOL SELECTION GUIDE:
    ✓ "CLV"
    ✓ "Future customer value"
    ✓ "Which customers are most valuable?"
+
+ORDER PARAMETER (predict_clv, score_churn_risk, predict_churn_probability, expected_remaining_lifetime):
+- By default these tools return the "top N" by the metric in DESCENDING order (highest/longest/highest risk first).
+- For questions asking for LOWEST, SHORTEST, LEAST, SAFEST, or "most at risk of churning soon" (i.e. shortest remaining life), pass order="ascending":
+  • predict_clv: order="ascending" → lowest/least valuable CLV
+  • score_churn_risk: order="ascending" → lowest/safest risk
+  • predict_churn_probability: order="ascending" → lowest/least likely to churn
+  • expected_remaining_lifetime: order="ascending" → shortest remaining lifetime
 
 DECISION RULES:
 - If question asks about "risk" or "ranking" → use score_churn_risk
