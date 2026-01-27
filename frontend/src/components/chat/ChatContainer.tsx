@@ -1,11 +1,16 @@
 import { useState, useRef, useEffect } from "react";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, HelpCircle } from "lucide-react";
 import { ChatMessage } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { askQuestion } from "@/lib/api";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface Message {
   id: string;
@@ -17,7 +22,7 @@ export function ChatContainer() {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
-      content: "Hi, I analyze your customer data to support growth and retention decisions. Today is December 9th, 2011. What can I help you with?",
+      content: "Hi, I analyze your customer data to support growth and retention decisions. I can answer questions using SQL queries, predictive models (CLV, churn), and segmentation analysis.",
       role: "assistant",
     },
   ]);
@@ -71,14 +76,22 @@ export function ChatContainer() {
             <MessageSquare className="w-5 h-5 text-accent-foreground" />
           </div>
           <div>
-            <h1 className="font-semibold text-primary-foreground">AI analyst</h1>
-            <p className="text-xs text-primary-foreground/70">For customer growth and retention</p>
+            <h1 className="font-semibold text-primary-foreground">AI analyst for growth & retention</h1>
+            <p className="text-xs text-primary-foreground/70">Analysis based on historical data up to December 9th, 2011.</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <Label htmlFor="memory-toggle" className="text-xs text-primary-foreground/70 cursor-pointer">
             Use memory
           </Label>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <HelpCircle className="w-3.5 h-3.5 text-primary-foreground/50 hover:text-primary-foreground/80 cursor-help" aria-label="What does memory do?" />
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-[240px]">
+              When on, the assistant remembers earlier messages in this conversation and can refer to them (e.g. &quot;as I showed above&quot;). Turn off for a clean slate or to keep each question independent.
+            </TooltipContent>
+          </Tooltip>
           <Switch
             id="memory-toggle"
             checked={useMemory}
@@ -141,6 +154,12 @@ export function ChatContainer() {
 
       {/* Input */}
       <ChatInput onSend={handleSend} disabled={isLoading} />
+      {/* Footer */}
+      <div className="px-5 py-3 bg-muted/50 border-t border-border">
+        <p className="text-xs text-muted-foreground text-center">
+          Built by Phuong H. Nguyen · Data Science & Machine Learning
+        </p>
+      </div>
     </div>
   );
 }
