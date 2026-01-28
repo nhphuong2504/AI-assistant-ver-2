@@ -1,6 +1,81 @@
-# AI analyst - Retail Data Chat Application
+# AI analyst for customer growth & retention - Retail Data Chat Application
+
+![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
+![Node.js](https://img.shields.io/badge/node.js-18+-green.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-009688.svg)
+![React](https://img.shields.io/badge/React-18-61DAFB.svg)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178C6.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 A full-stack monorepo application combining a FastAPI backend with a React frontend for AI-powered retail data analysis and chat interactions.
+
+## 🔄 Version Changes
+
+> **📢 For the previous/legacy version, please visit:**
+> 
+> **[🔗 Legacy Repository](https://github.com/nhphuong2504/AI-assistant)**
+
+## 🎥 Demo
+
+<!-- Video demo will be added here -->
+<!-- 
+You can add a video demo using one of these formats:
+
+**Option 1: YouTube/Vimeo embed**
+[![Demo Video](https://img.youtube.com/vi/VIDEO_ID/0.jpg)](https://www.youtube.com/watch?v=VIDEO_ID)
+
+**Option 2: Direct video link**
+[Watch Demo Video](https://your-video-url.com)
+
+**Option 3: Embedded video (if hosted)**
+<video src="path/to/demo.mp4" controls width="100%"></video>
+-->
+
+## ✨ Key Features
+
+### Basic Features
+
+- **🤖 AI-Powered Chat Interface** - Ask questions about your retail data in natural language
+- **💬 Conversation Memory** - Context-aware responses with thread-based conversation history
+- **🔍 SQL Query Interface** - Direct database querying with read-only access for data exploration
+- **📊 Database Schema Exploration** - View and understand your database structure through the API
+- **🌐 Modern Web Interface** - Beautiful React-based UI with real-time chat interactions
+- **⚡ Fast API Responses** - FastAPI backend with async support for quick query processing
+- **🔒 CORS Enabled** - Seamless frontend-backend communication configured out of the box
+
+## 📈 Advanced Insight Analytics
+
+The application includes sophisticated analytics modules for deep customer insights:
+
+### Customer Lifetime Value (CLV) Analysis
+
+- **BG/NBD Model** - Predicts customer purchase frequency and probability of being alive
+- **Gamma-Gamma Model** - Estimates average order value per customer
+- **RFM Analysis** - Recency, Frequency, Monetary value segmentation
+- **CLV Prediction** - Forecast customer lifetime value over specified time horizons
+- **Calibrated Models** - Validated models with train/test calibration for accurate predictions
+
+### Survival Analysis & Churn Prediction
+
+- **Cox Proportional Hazards Model** - Identifies factors affecting customer churn risk
+- **Kaplan-Meier Estimation** - Non-parametric survival curve analysis
+- **Customer Risk Scoring** - Leakage-free risk scoring and ranking system
+- **Expected Remaining Lifetime** - Predicts how long customers will remain active
+- **Churn Probability** - Estimates probability of churn within specified time horizons
+
+### Customer Segmentation
+
+- **Risk-Based Segmentation** - High/Medium/Low risk customer categorization
+- **Lifetime-Based Segmentation** - Short/Medium/Long expected lifetime buckets
+- **Multi-Dimensional Segmentation** - Combines risk and lifetime for actionable insights
+- **Actionable Recommendations** - Segment-specific action tags and recommended strategies
+
+### Advanced Analytics Capabilities
+
+- **Covariate Analysis** - Examines purchase frequency, monetary value, product diversity, and geographic factors
+- **Model Validation** - Comprehensive validation metrics including concordance index and calibration
+- **Time-to-Event Modeling** - Analyzes customer tenure, recency, and churn events
+- **Feature Engineering** - Automatic construction of predictive features from transaction data
 
 ## 📁 Project Structure
 
@@ -23,10 +98,121 @@ assistant/
 │   │   └── lib/         # API utilities
 │   └── public/          # Static assets
 ├── venv/                # Python virtual environment (root level)
-├── setup-backend.bat    # Backend setup script
-├── start-backend.bat    # Backend startup script
-└── start-frontend.bat   # Frontend startup script
+├── setup.bat            # Backend setup script (Windows)
+├── setup.sh             # Backend setup script (Linux/Mac)
+├── start-backend.bat    # Backend startup script (Windows)
+├── start-backend.sh     # Backend startup script (Linux/Mac)
+├── start-frontend.bat   # Frontend startup script (Windows)
+└── start-frontend.sh    # Frontend startup script (Linux/Mac)
 ```
+
+## 🏗️ Architecture
+
+### System Overview
+
+```
+┌──────────────┐    HTTP/REST API    ┌──────────────┐
+│   React      │◄───────────────────►│  FastAPI     │
+│  Frontend    │                      │   Backend    │
+│  (Port 8080) │                      │  (Port 8000) │
+└──────────────┘                      └──────┬───────┘
+                                             │
+                    ┌────────────────────────┼────────────┐
+                    │                        │            │
+                    ▼                        ▼            ▼
+            ┌──────────────┐      ┌──────────────┐  ┌──────────┐
+            │   SQLite     │      │  Analytics   │  │  OpenAI  │
+            │  Database    │      │   Modules    │  │    API   │
+            └──────────────┘      └──────────────┘  └──────────┘
+```
+
+### Backend Flow
+
+```
+┌─────────────────────────────────────────────────────┐
+│              FastAPI Backend                        │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│  ┌─────────────────────────────────────────────┐  │
+│  │         API Layer (main.py)                 │  │
+│  │  /ask-langchain  /query  /schema            │  │
+│  └──────────────────┬──────────────────────────┘  │
+│                     │                               │
+│                     ▼                               │
+│  ┌─────────────────────────────────────────────┐  │
+│  │      LangChain Agent (llm_langchain.py)     │  │
+│  │  • Tool Selection  • Memory Management      │  │
+│  └──┬──────────┬──────────┬──────────┬────────┘  │
+│     │          │          │          │             │
+│     ▼          ▼          ▼          ▼             │
+│  ┌──────┐  ┌────────┐  ┌────────┐  ┌──────────┐  │
+│  │ SQL  │  │  CLV   │  │ Churn  │  │Segmentation│ │
+│  │Query │  │Module  │  │Module  │  │  Module   │  │
+│  └──┬───┘  └────┬───┘  └────┬───┘  └─────┬─────┘  │
+│     │           │           │            │         │
+└─────┼───────────┼───────────┼────────────┼─────────┘
+      │           │           │            │
+      ▼           ▼           ▼            ▼
+┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+│ SQLite   │ │ Pandas   │ │ Pandas   │ │ Pandas   │
+│ Database │ │DataFrames│ │DataFrames│ │DataFrames│
+└──────────┘ └──────────┘ └──────────┘ └──────────┘
+```
+
+### Data Flow
+
+```
+User Question
+     │
+     ▼
+┌──────────────┐
+│ ChatContainer│
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐
+│  API Client  │ POST /ask-langchain
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐
+│ LangChain    │ Analyze → Select Tool
+│ Agent        │
+└──────┬───────┘
+       │
+   ┌───┴───┐
+   │       │
+   ▼       ▼
+┌─────┐ ┌──────────┐
+│ SQL │ │Analytics │
+│Query│ │Functions │
+└──┬──┘ └────┬─────┘
+   │         │
+   └────┬────┘
+        │
+        ▼
+┌──────────────┐
+│  OpenAI LLM  │ Generate Response
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐
+│ API Response │
+└──────┬───────┘
+       │
+       ▼
+┌──────────────┐
+│ ChatMessage  │ Display Answer
+└──────────────┘
+```
+
+## 📊 Dataset
+
+This application uses the **Online Retail** dataset from the UCI Machine Learning Repository. This is a transactional data set which contains all the transactions occurring between 01/12/2010 and 09/12/2011 for a UK-based and registered non-store online retail. The company mainly sells unique all-occasion gifts. Many customers of the company are wholesalers.
+
+**Dataset Source:** [UCI Machine Learning Repository - Online Retail](https://archive.ics.uci.edu/dataset/352/online+retail)
+
+The raw CSV data is located at `backend/data/raw/online_retail.csv` and is processed into a SQLite database during setup.
 
 ## 🚀 Quick Start
 
@@ -39,9 +225,18 @@ assistant/
 ### Backend Setup
 
 1. **Run the setup script:**
+   
+   **Windows:**
    ```bash
-   setup-backend.bat
+   setup.bat
    ```
+   
+   **Linux/Mac:**
+   ```bash
+   chmod +x setup.sh
+   ./setup.sh
+   ```
+   
    This will:
    - Create a Python virtual environment at the root (`venv/`)
    - Install all Python dependencies from `backend/requirements.txt`
@@ -51,7 +246,7 @@ assistant/
    - Add your OpenAI API key:
      ```
      OPENAI_API_KEY=your_api_key_here
-     OPENAI_MODEL=gpt-4
+     OPENAI_MODEL=gpt-4o-mini
      API_URL=http://127.0.0.1:8000
      DATABASE_PATH=backend/data/retail.sqlite
      ```
@@ -80,25 +275,37 @@ assistant/
    - Create indexes for optimal query performance
 
 4. **Start the backend server:**
+   
+   **Windows:**
    ```bash
    start-backend.bat
    ```
+   
+   **Linux/Mac:**
+   ```bash
+   chmod +x start-backend.sh
+   ./start-backend.sh
+   ```
+   
    The backend will run on `http://127.0.0.1:8000`
 
 ### Frontend Setup
 
 1. **Start the frontend development server:**
+   
+   **Windows:**
    ```bash
    start-frontend.bat
    ```
+   
+   **Linux/Mac:**
+   ```bash
+   chmod +x start-frontend.sh
+   ./start-frontend.sh
+   ```
+   
    This will automatically install Node.js dependencies if needed and start the dev server.
 
-2. **Configure environment variables (optional):**
-   - Copy `frontend/.env.example` to `frontend/.env`
-   - Set the API URL (defaults to `http://127.0.0.1:8000`):
-     ```
-     VITE_API_URL=http://127.0.0.1:8000
-     ```
 
 The frontend will run on `http://localhost:8080`
 
@@ -187,19 +394,6 @@ cd backend
 
 The frontend uses Vite with hot module replacement. Changes to React components will update in the browser automatically.
 
-### Running Tests
-
-**Backend:**
-```bash
-cd backend
-pytest
-```
-
-**Frontend:**
-```bash
-cd frontend
-npm test
-```
 
 ## 📝 Configuration
 
@@ -207,7 +401,7 @@ npm test
 
 Create `backend/.env` with:
 - `OPENAI_API_KEY` - Your OpenAI API key (required)
-- `OPENAI_MODEL` - Model to use (default: `gpt-4`)
+- `OPENAI_MODEL` - Model to use (default: `gpt-4o-mini`)
 - `API_URL` - Backend URL (default: `http://127.0.0.1:8000`)
 - `DATABASE_PATH` - Path to SQLite database
 
@@ -216,13 +410,8 @@ Create `backend/.env` with:
 Create `frontend/.env` with:
 - `VITE_API_URL` - Backend API URL (default: `http://127.0.0.1:8000`)
 
-## 🎯 Features
+⚠️ Never commit `.env` files. Add `backend/.env` and `frontend/.env` to `.gitignore`.
 
-- **AI-Powered Chat Interface** - Natural language queries about retail data
-- **Conversation Memory** - Context-aware responses using thread IDs
-- **SQL Query Interface** - Direct database querying (read-only)
-- **Analytics Integration** - CLV and survival analysis
-- **CORS Enabled** - Frontend-backend communication configured
 
 ## 📚 Additional Resources
 
@@ -230,13 +419,6 @@ Create `frontend/.env` with:
 - LangChain Documentation: https://python.langchain.com/
 - React Documentation: https://react.dev/
 - Vite Documentation: https://vitejs.dev/
-
-## 🤝 Contributing
-
-1. Ensure the virtual environment is activated
-2. Make changes in the respective `backend/` or `frontend/` directories
-3. Test your changes locally
-4. Commit and push
 
 ---
 
