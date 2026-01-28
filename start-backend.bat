@@ -8,7 +8,7 @@ if not exist venv (
     echo Upgrading pip...
     python -m pip install --upgrade pip
     echo Installing dependencies...
-    pip install -r requirements.txt
+    pip install -r backend/requirements.txt
 ) else (
     call venv\Scripts\activate
 )

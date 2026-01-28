@@ -14,6 +14,7 @@ assistant/
 │   ├── analytics/       # Analytics modules (CLV, survival analysis)
 │   ├── etl/             # Data loading scripts
 │   ├── data/            # Data files (CSV, SQLite)
+│   ├── requirements.txt # Python dependencies
 │   └── test/            # Backend tests
 ├── frontend/            # React + TypeScript frontend
 │   ├── src/
@@ -22,7 +23,6 @@ assistant/
 │   │   └── lib/         # API utilities
 │   └── public/          # Static assets
 ├── venv/                # Python virtual environment (root level)
-├── requirements.txt     # Python dependencies
 ├── setup-backend.bat    # Backend setup script
 ├── start-backend.bat    # Backend startup script
 └── start-frontend.bat   # Frontend startup script
@@ -44,7 +44,7 @@ assistant/
    ```
    This will:
    - Create a Python virtual environment at the root (`venv/`)
-   - Install all Python dependencies from `requirements.txt`
+   - Install all Python dependencies from `backend/requirements.txt`
 
 2. **Configure environment variables:**
    - Copy `backend/.env.example` to `backend/.env`

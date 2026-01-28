@@ -3,7 +3,7 @@ Test for expected_remaining_lifetime: compute for all active customers and sort 
 Also: ask LLM agent to find expected remaining life of customer 16446.
 
 Requires: database at backend/data/retail.sqlite (run etl/load_online_retail.py),
-         and deps from requirements.txt (lifelines, pandas, etc.).
+         and deps from backend/requirements.txt (lifelines, pandas, etc.).
          LLM test requires OPENAI_API_KEY and network.
 
 Run from backend: python test/test.py
