@@ -22,6 +22,7 @@ from analytics.survival import (
     fit_cox_baseline,
     score_customers,
     predict_churn_probability,
+    prioritize_retention_targets,
     expected_remaining_lifetime,
     build_segmentation_table,
     CUTOFF_DATE,
@@ -311,8 +312,8 @@ def predict_clv_tool(horizon_days: int = 90, limit_customers: int = 10, order: s
 
 
 @tool
-def score_churn_risk_tool(limit_customers: int = 25, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Rank and score customers by relative churn risk (risk_score, risk_rank, risk_bucket: High/Medium/Low). Returns RISK SCORES for ranking/prioritization, NOT probabilities. Use this for: ranking customers by risk, identifying high-risk customers, risk-based prioritization, or which customers need attention first. Returns risk_score (higher = higher risk), risk_rank, risk_percentile, and risk_bucket. Parameters: limit_customers (default: 25), order (default: "descending"; use "ascending" for lowest/safest risk), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns scores only for those customers. If not provided, returns top N by risk: descending = highest risk first; ascending = lowest risk first. Do NOT use for probability questions."""
+def score_churn_risk_tool(limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
+    """Rank and score customers by relative churn risk (risk_score, risk_rank, risk_bucket: High/Medium/Low). Returns RISK SCORES for ranking/prioritization, NOT probabilities. Use this for: ranking customers by risk, identifying high-risk customers, risk-based prioritization, or which customers need attention first. Returns risk_score (higher = higher risk), risk_rank, risk_percentile, and risk_bucket. Parameters: limit_customers (default: 10), order (default: "descending"; use "ascending" for lowest/safest risk), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns scores only for those customers. If not provided, returns top N by risk: descending = highest risk first; ascending = lowest risk first. Do NOT use for probability questions."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
@@ -376,8 +377,8 @@ def score_churn_risk_tool(limit_customers: int = 25, order: str = "descending", 
 
 
 @tool
-def predict_churn_probability_tool(X_days: int = 90, limit_customers: int = 25, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Predict the PROBABILITY (0-1) that active customers will churn in the next X days. Returns actual churn probabilities, not risk scores. Use this for: 'what is the probability customer X will churn in 90 days?', 'likelihood of churn', 'churn probability', or 'probability of leaving in X days'. Returns churn_probability (0.0 to 1.0), survival_at_t0, and survival_at_t0_plus_X. Parameters: X_days (default: 90), limit_customers (default: 25), order (default: "descending"; use "ascending" for lowest/least likely to churn), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by churn probability: descending = highest first; ascending = lowest first. Do NOT use for risk ranking or lifetime questions."""
+def predict_churn_probability_tool(X_days: int = 90, limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
+    """Predict the PROBABILITY (0-1) that active customers will churn in the next X days. Returns actual churn probabilities, not risk scores. Use this for: 'what is the probability customer X will churn in 90 days?', 'likelihood of churn', 'churn probability', or 'probability of leaving in X days'. Returns churn_probability (0.0 to 1.0), survival_at_t0, and survival_at_t0_plus_X. Parameters: X_days (default: 90), limit_customers (default: 10), order (default: "descending"; use "ascending" for lowest/least likely to churn), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by churn probability: descending = highest first; ascending = lowest first. Do NOT use for risk ranking or lifetime questions."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
@@ -441,8 +442,62 @@ def predict_churn_probability_tool(X_days: int = 90, limit_customers: int = 25, 
 
 
 @tool
-def expected_remaining_lifetime_tool(H_days: int = 365, limit_customers: int = 25, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Compute EXPECTED REMAINING LIFETIME in days for active customers (how long they will stay). Returns expected_remaining_life_days (number of days), NOT probabilities or risk scores. Use this for: 'how long will customer X stay?', 'expected remaining lifetime', 'customer lifetime expectancy', 'how many days until churn', or 'remaining customer duration'. Returns expected_remaining_life_days (numeric days), t0 (current tenure), and H_days (horizon). Parameters: H_days (default: 365), limit_customers (default: 25), order (default: "descending"; use "ascending" for shortest/least remaining lifetime), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by expected remaining life: descending = longest first; ascending = shortest first. Do NOT use for probability or risk ranking questions."""
+def prioritize_retention_targets_tool(prediction_horizon: int = 90, limit_customers: int = 10, order: str = "descending") -> str:
+    """Prioritize active customers for retention by combining CLV and churn probability. Returns customer_id, clv, churn_prob, and prioritize_score (clv * churn_prob). Use for: 'who should we target for retention?', 'prioritize retention', 'high-value at-risk customers', 'retention targets', or 'which customers to save first'. Parameters: prediction_horizon (default: 90 days), limit_customers (default: 10), order (default: 'descending' = highest priority first; use 'ascending' for lowest). Sorted by prioritize_score: higher = more valuable and more likely to churn = higher retention priority."""
+    try:
+        transactions_df = get_transactions_df()
+        cutoff_date = CUTOFF_DATE
+        inactivity_days = INACTIVITY_DAYS
+
+        cox_result = get_or_fit_cox_model(transactions_df, cutoff_date, inactivity_days)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in log")
+            rfm = build_rfm(transactions_df, cutoff_date=cutoff_date)
+            models = fit_models(rfm)
+            pred_unscaled = predict_clv(models, horizon_days=prediction_horizon, aov_fallback="global_mean")
+            pred_total_purchases = pred_unscaled["pred_purchases"].sum()
+            pred_total_revenue = pred_unscaled["clv"].sum(skipna=True)
+            target_purchases = pred_total_purchases * PURCHASE_SCALE if PURCHASE_SCALE != 1.0 else None
+            target_revenue = pred_total_revenue * REVENUE_SCALE if REVENUE_SCALE != 1.0 else None
+            clv_df = predict_clv(
+                models,
+                horizon_days=prediction_horizon,
+                scale_to_target_purchases=target_purchases,
+                scale_to_target_revenue=target_revenue,
+                aov_fallback="global_mean",
+            )
+
+        prioritized = prioritize_retention_targets(
+            model=cox_result["model"],
+            transactions=transactions_df,
+            clv_df=clv_df,
+            prediction_horizon=prediction_horizon,
+            cutoff_date=cutoff_date,
+            inactivity_days=inactivity_days,
+        )
+
+        prioritized = prioritized.sort_values("prioritize_score", ascending=(order == "ascending")).head(limit_customers)
+
+        result = {
+            "status": "success",
+            "total_customers": len(prioritized),
+            "prediction_horizon_days": prediction_horizon,
+            "summary": {
+                "mean_prioritize_score": float(prioritized["prioritize_score"].mean()),
+                "max_prioritize_score": float(prioritized["prioritize_score"].max()),
+                "min_prioritize_score": float(prioritized["prioritize_score"].min()),
+            },
+            "customers": prioritized[["customer_id", "clv", "churn_prob", "prioritize_score"]].to_dict(orient="records"),
+        }
+        return json.dumps(result, indent=2, default=str)
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e), "error_type": type(e).__name__})
+
+
+@tool
+def expected_remaining_lifetime_tool(H_days: int = 365, limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
+    """Compute EXPECTED REMAINING LIFETIME in days for active customers (how long they will stay). Returns expected_remaining_life_days (number of days), NOT probabilities or risk scores. Use this for: 'how long will customer X stay?', 'expected remaining lifetime', 'customer lifetime expectancy', 'how many days until churn', or 'remaining customer duration'. Returns expected_remaining_life_days (numeric days), t0 (current tenure), and H_days (horizon). Parameters: H_days (default: 365), limit_customers (default: 10), order (default: "descending"; use "ascending" for shortest/least remaining lifetime), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by expected remaining life: descending = longest first; ascending = shortest first. Do NOT use for probability or risk ranking questions."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
@@ -620,6 +675,7 @@ tools = [
     predict_clv_tool,
     score_churn_risk_tool,
     predict_churn_probability_tool,
+    prioritize_retention_targets_tool,
     expected_remaining_lifetime_tool,
     customer_segmentation_tool,
     execute_sql_query_tool,
@@ -652,77 +708,93 @@ except Exception as e:
     }, indent=2)
 
 # Enhanced system prompt with clearer tool selection guidance and schema
-SYSTEM_PROMPT = f"""You are a data assistant for an Online Retail SQLite database.
-You can answer questions using either SQL queries or specialized analytics functions.
+SYSTEM_PROMPT = f"""
+You are an expert Data Science Assistant for an Online Retail business.
+You have access to a SQLite database and a suite of advanced predictive analytics tools.
 
-ASSUME today's date is December 9th, 2011. All data, analytics (CLV, churn risk, expected lifetime, segmentation), and cutoff dates are as of this date. Use it when interpreting relative time (e.g. "this month", "last quarter", "recent", "current") or when the user asks about "today" or "now".
+Your goal is to answer user questions by selecting the BEST tool.
+Follow this hierarchy: **Strategy/Action** > **Specific Prediction** > **Historical Fact**.
 
-DATABASE SCHEMA:
+========================
+DATA CONTEXT (CRITICAL)
+========================
+- **Cutoff Date:** 2011-12-09 (All predictions are calculated as of this date).
+- **Churn Definition:** A customer is 'churned' if they have made NO purchases for INACTIVITY_DAYS consecutive days as of the cutoff date.
+- **Future Dates:** You do NOT have future transactions. When asked "when will they churn", estimate using `expected_remaining_lifetime_tool` + the cutoff date.
+
+========================
+TOOL SELECTION HIERARCHY
+========================
+
+### LEVEL 1: STRATEGY & ACTION (Highest Value)
+
+1. **prioritize_retention_targets_tool**
+   - **Trigger:** "Who should I contact?", "Who to save?", "High value at risk", "Retention priority".
+   - **Why:** Correct when BOTH value and churn likelihood matter.
+
+2. **customer_segmentation_tool**
+   - **Trigger:** "Segment my customers", "Analyze the customer base", "What actions should I take?".
+   - **Why:** Combines Risk and Lifetime into actionable strategic buckets.
+
+### LEVEL 2: SPECIFIC PREDICTIONS
+
+3. **predict_clv_tool**
+   - **Trigger:** "CLV", "future value", "predicted revenue", "most valuable customers".
+   - **Note:** Forward-looking. Do NOT use for historical sales.
+
+4. **score_churn_risk_tool**
+   - **Trigger:** "Rank by risk", "Who is high risk?", "Risk scores".
+   - **Note:** Relative ranking, NOT probability.
+
+5. **predict_churn_probability_tool**
+   - **Trigger:** "Probability", "likelihood", "chance", "% of churn".
+   - **Note:** Returns 0–1 probability.
+
+6. **expected_remaining_lifetime_tool**
+   - **Trigger:** "How long will they stay?", "Days until churn", "When will they leave?".
+   - **Critical:** "Soonest churn" → `order="ascending"`.
+
+### LEVEL 3: HISTORICAL & DESCRIPTIVE
+
+7. **execute_sql_query_tool**
+   - **Trigger:** Historical reporting and aggregation.
+   - **Limit:** NEVER use for predictions.
+
+========================
+AMBIGUITY RESOLUTION
+========================
+- "Best customers" → Prefer **CLV** unless user explicitly says "historical" or "past sales".
+- "At risk customers" →
+  - If asking for ACTION ("who to save") → **prioritize_retention_targets_tool**
+  - If asking for LIST/RANKING ("who is risky") → **score_churn_risk_tool**
+- "Most likely to churn" →
+  - If Time-based ("soonest") → **expected_remaining_lifetime_tool** (order="ascending")
+  - If Probability-based ("likelihood") → **predict_churn_probability_tool**
+
+========================
+PARAMETER MAPPING RULES
+========================
+- "Next 30/60/90 days" → `X_days` / `horizon_days`
+- "6 months" → ~180 days; "1 year" → 365 days
+- Default `order="descending"` (Highest Value, Highest Risk, Longest Life)
+- "Safest" / "Least Likely" / "Soonest Churn" → `order="ascending"`
+
+========================
+DATABASE SCHEMA
+========================
 {SCHEMA_JSON}
 
-TOOL SELECTION GUIDE:
+========================
+RESPONSE SYNTHESIS
+========================
+1. **Direct Answer:** Answer the question in the FIRST sentence.
+2. **Context:** Brief explanation of what the metric means relative to the **2011-12-09 cutoff**.
+3. **Action:** Suggest next steps if risk/value is high (e.g., "Check segmentation for actions").
+4. **Formatting:** Use small bulleted lists for "Top N" requests. Never dump raw JSON.
+"""
 
-1. execute_sql_query - Use for HISTORICAL/DESCRIPTIVE questions:
-   ✓ Revenue by country/month/product
-   ✓ Top customers/products by sales
-   ✓ Sales trends, aggregations, counts, sums, averages
-   ✓ Filtering, grouping, sorting historical data
-   ✓ "What happened" questions
-   ✓ "Show me" questions about past data
-   ✗ Do NOT use for predictions, probabilities, or future values
 
-2. score_churn_risk - Use for RISK RANKING questions:
-   ✓ "Which customers are at high risk?"
-   ✓ "Rank customers by churn risk"
-   ✓ "Show me high-risk customers"
-   ✓ Returns: risk_score, risk_rank, risk_bucket (High/Medium/Low)
-   ✗ Do NOT use for probabilities or "how long" questions
 
-3. predict_churn_probability - Use for PROBABILITY questions:
-   ✓ "What is the probability customer X will churn?"
-   ✓ "Likelihood of churn"
-   ✓ "Churn probability"
-   ✓ Returns: churn_probability (0.0 to 1.0)
-   ✗ Do NOT use for risk ranking or lifetime questions
-
-4. expected_remaining_lifetime - Use for LIFETIME/DURATION questions:
-   ✓ "How long will customer X stay?"
-   ✓ "Expected remaining lifetime"
-   ✓ "How many days until churn?"
-   ✓ Returns: expected_remaining_life_days (number of days)
-   ✗ Do NOT use for probabilities or risk ranking
-
-5. customer_segmentation - Use for SEGMENTATION/ACTION questions:
-   ✓ "Show me customer segments"
-   ✓ "What actions should I take?"
-   ✓ "Customer groups by risk and lifetime"
-   ✓ Returns: segments (High-Long, Medium-Medium, etc.) with actions
-   ✗ Do NOT use for individual metrics (use specific tools instead)
-
-6. predict_customer_lifetime_value - Use for CLV/VALUE questions:
-   ✓ "Customer lifetime value"
-   ✓ "CLV"
-   ✓ "Future customer value"
-   ✓ "Which customers are most valuable?"
-
-ORDER PARAMETER (predict_clv, score_churn_risk, predict_churn_probability, expected_remaining_lifetime):
-- By default these tools return the "top N" by the metric in DESCENDING order (highest/longest/highest risk first).
-- For questions asking for LOWEST, SHORTEST, LEAST, SAFEST, or "most at risk of churning soon" (i.e. shortest remaining life), pass order="ascending":
-  • predict_clv: order="ascending" → lowest/least valuable CLV
-  • score_churn_risk: order="ascending" → lowest/safest risk
-  • predict_churn_probability: order="ascending" → lowest/least likely to churn
-  • expected_remaining_lifetime: order="ascending" → shortest remaining lifetime
-
-DECISION RULES:
-- If question asks about "risk" or "ranking" → use score_churn_risk
-- If question asks about "probability" or "likelihood" → use predict_churn_probability
-- If question asks about "how long" or "lifetime" → use expected_remaining_lifetime
-- If question asks about "segments" or "actions" → use customer_segmentation
-- If question asks about "value" or "CLV" → use predict_customer_lifetime_value
-- If question asks about historical data, aggregations, or descriptive statistics → use execute_sql_query
-- For multi-step questions, chain tools in logical order (e.g., get high-risk customers first, then their probabilities)
-
-Always choose the most appropriate tool(s) and chain them if needed for complex questions."""
 
 # Initialize MemorySaver for proper conversation memory
 memory = MemorySaver()

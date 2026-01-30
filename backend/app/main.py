@@ -12,6 +12,7 @@ from analytics.survival import (
     fit_cox_baseline,
     score_customers,
     predict_churn_probability,
+    prioritize_retention_targets,
     expected_remaining_lifetime,
     build_segmentation_table,
     CUTOFF_DATE,
@@ -356,6 +357,61 @@ def execute_analytics_function(
         answer = f"Segmented {len(segmentation_df)} customers into {len(segment_counts)} segments "
         answer += f"(cutoff: {cutoff_date}, inactivity: {inactivity_days} days, H: {H_days} days). "
         answer += f"Top segments: {', '.join(list(segment_counts.keys())[:3])}."
+        
+        return {
+            "columns": columns,
+            "rows": rows,
+            "row_count": len(rows),
+            "answer": answer
+        }
+    
+    elif function_name == "prioritize_retention_targets":
+        cutoff_date = FIXED_CUTOFF_DATE
+        inactivity_days = FIXED_INACTIVITY_DAYS
+        prediction_horizon = parameters.get("prediction_horizon", 90)
+        
+        cov = build_covariate_table(
+            transactions=transactions_df,
+            cutoff_date=cutoff_date,
+            inactivity_days=inactivity_days,
+        ).df
+        
+        cox_result = fit_cox_baseline(
+            covariates=cov,
+            covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
+            train_frac=1.0,
+            random_state=42,
+            penalizer=0.1,
+        )
+        
+        rfm = build_rfm(transactions_df, cutoff_date=cutoff_date)
+        models = fit_models(rfm)
+        pred_unscaled = predict_clv(models, horizon_days=prediction_horizon, aov_fallback="global_mean")
+        pred_total_purchases = pred_unscaled["pred_purchases"].sum()
+        pred_total_revenue = pred_unscaled["clv"].sum(skipna=True)
+        target_purchases = pred_total_purchases * PURCHASE_SCALE if PURCHASE_SCALE != 1.0 else None
+        target_revenue = pred_total_revenue * REVENUE_SCALE if REVENUE_SCALE != 1.0 else None
+        clv_df = predict_clv(
+            models,
+            horizon_days=prediction_horizon,
+            scale_to_target_purchases=target_purchases,
+            scale_to_target_revenue=target_revenue,
+            aov_fallback="global_mean",
+        )
+        
+        prioritized = prioritize_retention_targets(
+            model=cox_result["model"],
+            transactions=transactions_df,
+            clv_df=clv_df,
+            prediction_horizon=prediction_horizon,
+            cutoff_date=cutoff_date,
+            inactivity_days=inactivity_days,
+        )
+        
+        columns = ["customer_id", "clv", "churn_prob", "prioritize_score"]
+        rows = prioritized[columns].to_dict(orient="records")
+        answer = f"Prioritized {len(prioritized)} active customers for retention (prediction horizon: {prediction_horizon} days). "
+        answer += f"Top prioritize_score: {prioritized['prioritize_score'].max():.2f}."
         
         return {
             "columns": columns,

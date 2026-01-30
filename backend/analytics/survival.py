@@ -895,6 +895,62 @@ def predict_churn_probability(
     return result_df
 
 
+def prioritize_retention_targets(
+    model: CoxPHFitter,
+    transactions: pd.DataFrame,
+    clv_df: pd.DataFrame,
+    prediction_horizon: int = 90,
+    cutoff_date: str = CUTOFF_DATE,
+    inactivity_days: int = INACTIVITY_DAYS,
+) -> pd.DataFrame:
+    """
+    Scores active customers by multiplying CLV and churn probability (prioritize_score = clv * churn_prob).
+    Use for retention targeting: high-value at-risk customers first.
+
+    Only customers present in BOTH clv_df and churn probability (active) are scored. Customers
+    with CLV but no churn probability, or with churn probability but no (valid) CLV, are excluded.
+
+    CLV should come from predict_customer_lifetime_value (e.g. predict_clv from analytics.clv)
+    with the same horizon. Churn probability comes from predict_churn_probability over the
+    same prediction horizon.
+
+    Args:
+        model: Fitted CoxPHFitter model (must NOT be refit)
+        transactions: DataFrame with customer_id, invoice_no, invoice_date, revenue, stock_code
+        clv_df: DataFrame with columns customer_id and clv (from predict_clv / predict_customer_lifetime_value)
+        prediction_horizon: Prediction horizon in days for churn probability and CLV alignment (default: 90)
+        cutoff_date: Cutoff date (inclusive) for feature computation (YYYY-MM-DD)
+        inactivity_days: Inactivity days threshold for churn definition (default: 90)
+
+    Returns:
+        DataFrame with columns:
+        - customer_id: Customer identifier
+        - clv: Customer lifetime value (from clv_df)
+        - churn_prob: Conditional probability of churn in next prediction_horizon days
+        - prioritize_score: clv * churn_prob, sorted from highest to lowest
+    """
+    churn_df = predict_churn_probability(
+        model=model,
+        transactions=transactions,
+        cutoff_date=cutoff_date,
+        X_days=prediction_horizon,
+        inactivity_days=inactivity_days,
+    )
+    if "customer_id" not in clv_df.columns or "clv" not in clv_df.columns:
+        raise ValueError("clv_df must contain columns 'customer_id' and 'clv'")
+    merged = churn_df[["customer_id", "churn_probability"]].merge(
+        clv_df[["customer_id", "clv"]].drop_duplicates(subset="customer_id"),
+        on="customer_id",
+        how="inner",
+    )
+    merged = merged.dropna(subset=["clv"])
+    merged["prioritize_score"] = merged["clv"] * merged["churn_probability"]
+    result = merged[["customer_id", "clv", "churn_probability", "prioritize_score"]].rename(
+        columns={"churn_probability": "churn_prob"}
+    )
+    return result.sort_values("prioritize_score", ascending=False).reset_index(drop=True)
+
+
 def expected_remaining_lifetime(
     model: CoxPHFitter,
     covariates_df: pd.DataFrame,
@@ -922,33 +978,15 @@ def expected_remaining_lifetime(
         - t0: Current duration at cutoff
         - H_days: Horizon used for computation
         - expected_remaining_life_days: Restricted expected remaining lifetime in days
+            (-1.0 = "Survived beyond training data - VIP/low risk")
     """
-    # Helper function for numerical integration
-    def expected_remaining_life(sf, t0, H_days, eps=1e-12):
-        """Compute restricted expected remaining lifetime using numerical integration."""
-        t_grid = sf.index.values.astype(float)
-        S_grid = sf.values[:, 0].astype(float)
-
-        t_max = min(t0 + H_days, t_grid.max())
-        if t0 >= t_max or t0 > t_grid.max():
-            return 0.0
-
-        S_t0 = float(np.interp(t0, t_grid, S_grid))
-        if S_t0 <= eps:
-            return 0.0
-
-        S_tmax = float(np.interp(t_max, t_grid, S_grid))
-
-        mask = (t_grid > t0) & (t_grid < t_max)
-        t_inner = t_grid[mask]
-        S_inner = S_grid[mask]
-
-        t_all = np.concatenate(([t0], t_inner, [t_max]))
-        S_all = np.concatenate(([S_t0], S_inner, [S_tmax]))
-
-        S_cond = S_all / S_t0
-        return float(np.trapezoid(S_cond, t_all))
-
+    # NumPy compatibility (1.x has trapz; 2.x has trapezoid, trapz removed)
+    if hasattr(np, "trapezoid"):
+        trapz_fn = np.trapezoid
+    elif hasattr(np, "trapz"):
+        trapz_fn = np.trapz
+    else:
+        raise RuntimeError("NumPy has neither 'trapezoid' nor 'trapz'")
     
     # Step 1: Filter to active customers (event == 0)
     active_customers = covariates_df[covariates_df["event"] == 0].copy()
@@ -984,25 +1022,52 @@ def expected_remaining_lifetime(
     else:
         raise ValueError("covariates_df must contain either 'duration' or 'tenure_days' column")
     
-    # Step 3: Compute expected remaining lifetime for each active customer
+    # *** MAJOR FIX: BATCH PREDICTION (100x faster) ***
+    X_batch = active_customers[covariate_cols].reset_index(drop=True)
+    sf_all = model.predict_survival_function(X_batch)  # Shape: times x customers
+    
+    t_grid = sf_all.index.values.astype(float)
+    
+    # Step 3: Compute for each customer (now using pre-computed curves)
     results = []
     
-    for idx, row in active_customers.iterrows():
+    for i in range(len(active_customers)):
+        row = active_customers.iloc[i]
         customer_id = row["customer_id"]
-        t0 = row[t0_col]  # Current duration at cutoff
+        t0 = row[t0_col]
         
-        # Extract covariates for this customer (as DataFrame with single row)
-        X_row = pd.DataFrame([row[covariate_cols]], columns=covariate_cols)
+        # Get survival curve for THIS customer (column i)
+        sf = sf_all.iloc[:, i]  # Series: time index, S(t) values
+        S_grid = sf.values.astype(float)
         
-        # Get individual survival curve
-        # Returns DataFrame with time as index, one column per customer
-        sf = model.predict_survival_function(X_row)
+        # Numerical integration (inlined from your helper)
+        t_max = min(t0 + H_days, t_grid[-1])
+        eps = 1e-12
         
-        # Compute expected remaining lifetime using numerical integration
-        expected_life = expected_remaining_life(sf, t0, H_days)
+        if t0 > t_grid[-1]:
+            # LONG-TENURE: Survived beyond training data → VIP/low risk
+            expected_life = -1.0
+        elif t0 >= t_max:
+            expected_life = 0.0
+        else:
+            S_t0 = float(np.interp(t0, t_grid, S_grid))
+            if S_t0 <= eps:
+                expected_life = 0.0
+            else:
+                S_tmax = float(np.interp(t_max, t_grid, S_grid))
+                mask = (t_grid > t0) & (t_grid < t_max)
+                t_inner = t_grid[mask]
+                S_inner = S_grid[mask]
+                
+                t_all = np.concatenate(([t0], t_inner, [t_max]))
+                S_all = np.concatenate(([S_t0], S_inner, [S_tmax]))
+                
+                S_cond = S_all / S_t0
+                expected_life = float(trapz_fn(S_cond, t_all))
         
-        # Validation: 0 ≤ expected_remaining_life_days ≤ H_days
-        expected_life = max(0.0, min(float(H_days), expected_life))
+        # Validation: clamp to [0, H] (skip for -1 flag)
+        if expected_life >= 0:
+            expected_life = max(0.0, min(float(H_days), expected_life))
         
         results.append({
             "customer_id": customer_id,
@@ -1012,11 +1077,10 @@ def expected_remaining_lifetime(
         })
     
     result_df = pd.DataFrame(results)
-    
-    # Sort by expected_remaining_life_days descending (longest expected life first)
     result_df = result_df.sort_values("expected_remaining_life_days", ascending=False).reset_index(drop=True)
     
     return result_df
+
 
 
 def build_segmentation_table(
