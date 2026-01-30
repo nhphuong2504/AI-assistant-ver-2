@@ -1,5 +1,5 @@
 """
-Test script for expected remaining lifetime computation using fitted Cox model.
+Test script for expected remaining lifetime computation using Monte Carlo (BG/NBD).
 """
 import pandas as pd
 import numpy as np
@@ -9,11 +9,9 @@ import sys
 # Add parent directory to path to import analytics module
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from analytics.survival import (
-    build_covariate_table,
-    fit_cox_baseline,
-    expected_remaining_lifetime,
-)
+from analytics.clv import build_rfm, fit_models
+from analytics.monte_carlo import compute_erl_days
+from analytics.survival import build_covariate_table, fit_cox_baseline, score_customers
 from app.db import run_query_internal
 
 # Load transactions from SQLite
@@ -28,86 +26,88 @@ df = pd.DataFrame(rows)
 
 print(f"Total transactions: {len(df)}")
 
-# Step 1: Fit the final Cox model with specified covariates
+CUTOFF_DATE = "2011-12-09"
+INACTIVITY_DAYS = 90
+
+# Step 1: Build RFM and customer summary for Monte Carlo ERL
 print("\n" + "="*80)
-print("FITTING FINAL COX MODEL")
+print("BUILDING RFM AND CUSTOMER SUMMARY")
 print("="*80)
 
-# Build covariate table
-cov_table = build_covariate_table(
-    transactions=df,
-    cutoff_date="2011-12-09",
-    inactivity_days=90,
+rfm = build_rfm(df, CUTOFF_DATE)
+print(f"RFM table: {len(rfm):,} customers")
+
+df["invoice_date"] = pd.to_datetime(df["invoice_date"])
+cutoff_dt = pd.to_datetime(CUTOFF_DATE)
+last_purchases = (
+    df[df["invoice_date"] <= cutoff_dt]
+    .groupby("customer_id")["invoice_date"]
+    .max()
+    .reset_index()
 )
-cov = cov_table.df
+last_purchases.columns = ["customer_id", "last_purchase_date"]
+last_purchases["last_purchase_date"] = last_purchases["last_purchase_date"].dt.strftime("%Y-%m-%d")
+customer_summary = rfm.reset_index().merge(last_purchases, on="customer_id", how="left")
+print(f"Customer summary: {len(customer_summary):,} customers")
 
-print(f"Total customers: {len(cov)}")
-print(f"Churn rate: {cov['event'].mean():.3f}")
-print(f"Active customers (event=0): {(cov['event'] == 0).sum()}")
-print(f"Churned customers (event=1): {(cov['event'] == 1).sum()}")
+# Fit BG/NBD model
+print("\nFitting BG/NBD model...")
+clv_result = fit_models(rfm)
+bgf = clv_result.bgnbd
+print("BG/NBD model fitted")
 
-# Fit model with final covariates: n_orders, log_monetary_value, product_diversity
-print("\nFitting Cox model with covariates: n_orders, log_monetary_value, product_diversity")
-result = fit_cox_baseline(
-    covariates=cov,
-    covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-    train_frac=1.0,
-    random_state=42,
-    penalizer=0.1,
-)
-
-print(f"Training set: {result['n_train']} customers")
-print(f"Validation set: {result['n_validation']} customers")
-
-# Get the fitted model
-cox_model = result['model']
-
-print("\nModel Summary:")
-print(result['summary'][['covariate', 'coef', 'hazard_ratio', 'p']].to_string(index=False))
-
-# Step 2: Compute expected remaining lifetime for active customers
+# Step 2: Compute expected remaining lifetime (Monte Carlo)
 print("\n" + "="*80)
-print("COMPUTING EXPECTED REMAINING LIFETIME")
+print("COMPUTING EXPECTED REMAINING LIFETIME (MONTE CARLO)")
 print("="*80)
 
-H_days = 365
-print(f"\nHorizon: {H_days} days")
-
-# Compute expected remaining lifetime
-expected_lifetime = expected_remaining_lifetime(
-    model=cox_model,
-    covariates_df=cov,
-    H_days=H_days,
+erl_result = compute_erl_days(
+    bgf=bgf,
+    customer_summary_df=customer_summary,
+    cutoff_date=CUTOFF_DATE,
+    INACTIVITY_DAYS=INACTIVITY_DAYS,
+    N=1000,
+    seed=42,
+    max_days=1825,
 )
 
-print(f"\nActive customers with expected lifetime: {len(expected_lifetime)}")
+# Map to API shape: expected_remaining_life_days, t0, H_days
+expected_lifetime = erl_result.merge(
+    customer_summary[["customer_id", "T"]], on="customer_id", how="left"
+).rename(columns={"ERL_days": "expected_remaining_life_days", "T": "t0"})
+expected_lifetime["H_days"] = 365
+
+print(f"\nTotal customers with ERL: {len(expected_lifetime)}")
 
 # Verify output columns
 expected_cols = ['customer_id', 't0', 'H_days', 'expected_remaining_life_days']
 assert all(col in expected_lifetime.columns for col in expected_cols), \
     f"Missing expected columns. Got: {list(expected_lifetime.columns)}"
 
-# Verify H_days is correct
-assert (expected_lifetime['H_days'] == H_days).all(), f"All H_days should be {H_days}"
-
 # Verify t0 > 0
-assert (expected_lifetime['t0'] > 0).all(), "All t0 (duration/tenure_days) should be > 0"
+assert (expected_lifetime['t0'] > 0).all(), "All t0 (tenure T) should be > 0"
 
-# Validation: 0 ≤ expected_remaining_life_days ≤ H_days
+# Validation: expected_remaining_life_days >= 0 (Monte Carlo can exceed H_days)
 assert (expected_lifetime['expected_remaining_life_days'] >= 0).all(), \
     "Expected remaining lifetime must be >= 0"
-assert (expected_lifetime['expected_remaining_life_days'] <= H_days).all(), \
-    f"Expected remaining lifetime must be <= {H_days}"
 
-print(f"\nExpected Remaining Lifetime Summary (horizon: {H_days} days):")
+print(f"\nExpected Remaining Lifetime Summary:")
 print(expected_lifetime['expected_remaining_life_days'].describe())
 
-# Get risk scores for comparison
-from analytics.survival import score_customers
+# Get risk scores for comparison (Cox model)
+cov_table = build_covariate_table(df, CUTOFF_DATE, INACTIVITY_DAYS)
+cov = cov_table.df
+cox_result = fit_cox_baseline(
+    covariates=cov,
+    covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
+    train_frac=1.0,
+    random_state=42,
+    penalizer=0.1,
+)
 scored = score_customers(
-    model=cox_model,
+    model=cox_result['model'],
     transactions=df,
-    cutoff_date="2011-12-09",
+    cutoff_date=CUTOFF_DATE,
 )
 
 # Merge expected lifetime with risk scores and covariates
@@ -144,6 +144,5 @@ else:
 print("\n" + "="*80)
 print("TEST COMPLETED")
 print("="*80)
-print("\nThe expected_remaining_lifetime function correctly computes restricted")
-print("expected remaining lifetime for active customers using the Cox model.")
-
+print("\nThe compute_erl_days function (Monte Carlo) correctly computes expected")
+print("remaining lifetime in days for customers using the BG/NBD model.")

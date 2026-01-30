@@ -140,6 +140,39 @@ def test_monte_carlo_real_data():
     print(f"\nProb_alive Statistics:")
     print(result["prob_alive"].describe())
     
+    # Active customers only (not already churned by inactivity rule)
+    active_customers = result[result["ERL_days"] > 0].copy()
+    print(f"\n--- Active Customers Statistics (ERL_days > 0) ---")
+    print(f"Active customers: {len(active_customers):,}")
+    print(f"\nERL_days Statistics (Active Customers Only):")
+    erl_stats = active_customers["ERL_days"].describe(percentiles=[.25, .5, .75, .9, .95, .99])
+    print(erl_stats)
+    print(f"\nProb_alive Statistics (Active Customers Only):")
+    prob_stats = active_customers["prob_alive"].describe(percentiles=[.25, .5, .75, .9, .95, .99])
+    print(prob_stats)
+    
+    # Distribution counts (binned) instead of plots
+    def print_binned_counts(series, name, bins_edges):
+        """Print count in each bin for a series."""
+        bins = pd.cut(series, bins=bins_edges, include_lowest=True)
+        counts = bins.value_counts().sort_index()
+        print(f"\n--- {name} (n={len(series):,}) ---")
+        for interval, count in counts.items():
+            print(f"  {interval}: {count:,}")
+        print(f"  Total: {counts.sum():,}")
+
+    # ERL_days bins: 0, 0-90, 90-180, ..., 900-1825 (and cap at 1825 if needed)
+    erl_bins = [0, 90, 180, 270, 360, 450, 540, 630, 720, 900, 1825]
+    print_binned_counts(result["ERL_days"], "ERL_days Distribution - All Customers", erl_bins)
+    if len(active_customers) > 0:
+        print_binned_counts(active_customers["ERL_days"], "ERL_days Distribution - Active Customers Only", erl_bins)
+
+    # Prob_alive bins: 0-0.2, 0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0
+    prob_bins = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    print_binned_counts(result["prob_alive"], "Prob_alive Distribution - All Customers", prob_bins)
+    if len(active_customers) > 0:
+        print_binned_counts(active_customers["prob_alive"], "Prob_alive Distribution - Active Customers Only", prob_bins)
+    
     # Show top 10 customers by ERL_days
     print(f"\n--- Top 10 Customers by ERL_days ---")
     top_10 = result.nlargest(10, "ERL_days")[
@@ -149,7 +182,6 @@ def test_monte_carlo_real_data():
     
     # Show bottom 10 active customers by ERL_days (only customers with ERL_days > 0)
     print(f"\n--- Bottom 10 Active Customers by ERL_days ---")
-    active_customers = result[result["ERL_days"] > 0].copy()
     if len(active_customers) > 0:
         bottom_10 = active_customers.nsmallest(10, "ERL_days")[
             ["customer_id", "ERL_days", "prob_alive", "last_purchase_age_days"]
@@ -170,7 +202,7 @@ def test_monte_carlo_real_data():
 
 if __name__ == "__main__":
     # Run basic test
-    test_monte_carlo_basic()
+    # test_monte_carlo_basic()
     
     # Run real data test
     test_monte_carlo_real_data()

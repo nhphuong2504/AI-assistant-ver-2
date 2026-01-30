@@ -23,11 +23,11 @@ from analytics.survival import (
     score_customers,
     predict_churn_probability,
     prioritize_retention_targets,
-    expected_remaining_lifetime,
     build_segmentation_table,
     CUTOFF_DATE,
     INACTIVITY_DAYS,
 )
+from analytics.monte_carlo import compute_erl_days
 from app.db import run_query, run_query_internal, get_schema, ensure_select_only
 
 load_dotenv()
@@ -119,8 +119,8 @@ def get_or_fit_cox_model(transactions_df: pd.DataFrame, cutoff_date: str, inacti
     # Cache the model
     cache_cox_model(cache_key, cox_result['model'])
     
-    # Use full covariate table as train_df so downstream (expected_remaining_lifetime,
-    # build_segmentation_table) get customer_id, tenure_days, monetary_value, etc.
+    # Use full covariate table as train_df so downstream (build_segmentation_table, etc.)
+    # get customer_id, tenure_days, monetary_value, etc.
     cox_result['train_df'] = cov
     
     return cox_result
@@ -496,22 +496,36 @@ def prioritize_retention_targets_tool(prediction_horizon: int = 90, limit_custom
 
 
 @tool
-def expected_remaining_lifetime_tool(H_days: int = 365, limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
+def compute_erl_days_tool(H_days: int = 365, limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
     """Compute EXPECTED REMAINING LIFETIME in days for active customers (how long they will stay). Returns expected_remaining_life_days (number of days), NOT probabilities or risk scores. Use this for: 'how long will customer X stay?', 'expected remaining lifetime', 'customer lifetime expectancy', 'how many days until churn', or 'remaining customer duration'. Returns expected_remaining_life_days (numeric days), t0 (current tenure), and H_days (horizon). Parameters: H_days (default: 365), limit_customers (default: 10), order (default: "descending"; use "ascending" for shortest/least remaining lifetime), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by expected remaining life: descending = longest first; ascending = shortest first. Do NOT use for probability or risk ranking questions."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
         inactivity_days = INACTIVITY_DAYS
         
-        cox_result = get_or_fit_cox_model(transactions_df, cutoff_date, inactivity_days)
-        
-        expected_lifetimes = expected_remaining_lifetime(
-            model=cox_result['model'],
-            covariates_df=cox_result['train_df'],
-            H_days=H_days,
-            inactivity_days=inactivity_days,
+        rfm = build_rfm(transactions_df, cutoff_date)
+        transactions_df["invoice_date"] = pd.to_datetime(transactions_df["invoice_date"])
+        cutoff_dt = pd.to_datetime(cutoff_date)
+        last_purchases = (
+            transactions_df[transactions_df["invoice_date"] <= cutoff_dt]
+            .groupby("customer_id")["invoice_date"]
+            .max()
+            .reset_index()
         )
-        
+        last_purchases.columns = ["customer_id", "last_purchase_date"]
+        last_purchases["last_purchase_date"] = last_purchases["last_purchase_date"].dt.strftime("%Y-%m-%d")
+        customer_summary = rfm.reset_index().merge(last_purchases, on="customer_id", how="left")
+        clv_result = fit_models(rfm)
+        erl_result = compute_erl_days(
+            bgf=clv_result.bgnbd,
+            customer_summary_df=customer_summary,
+            cutoff_date=cutoff_date,
+            INACTIVITY_DAYS=inactivity_days,
+        )
+        expected_lifetimes = erl_result.merge(
+            customer_summary[["customer_id", "T"]], on="customer_id", how="left"
+        ).rename(columns={"ERL_days": "expected_remaining_life_days", "T": "t0"})
+
         # Filter by customer_id(s) if provided
         if customer_id is not None or customer_ids is not None:
             expected_lifetimes, found_ids, not_found_ids = filter_by_customer_ids(expected_lifetimes, customer_id, customer_ids)
@@ -561,7 +575,7 @@ def expected_remaining_lifetime_tool(H_days: int = 365, limit_customers: int = 1
 
 @tool
 def customer_segmentation_tool(H_days: int = 365, customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Build comprehensive customer segmentation combining RISK LABELS (High/Medium/Low from churn risk) and EXPECTED REMAINING LIFETIME buckets (Short/Medium/Long). Returns 9 segments (e.g., 'High-Long', 'Medium-Medium', 'Low-Short') with action tags and recommended actions. Use this for: customer segmentation, segment analysis, action recommendations, customer groups by risk and lifetime, strategic customer management, or which actions to take for different customer types. Parameters: H_days (default: 365), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns segmentation only for those customers. If not provided, returns all customers with samples per segment (default behavior). This is a COMPREHENSIVE segmentation that combines both risk and lifetime - do NOT use for individual risk scores, probabilities, or lifetime values alone."""
+    """Build comprehensive customer segmentation combining RISK LABELS (High/Medium/Low from churn risk) and ERL buckets (At-Risk 0-90 days, Stable 91-270, Valued 271-720, VIP >720). Returns 12 segments (e.g., 'High/At-Risk', 'Medium/Valued', 'Low/VIP') with action tags and recommended actions. Use this for: customer segmentation, segment analysis, action recommendations, customer groups by risk and lifetime, strategic customer management, which actions to take for different customer types; and for questions about a SPECIFIC customer or GROUP of customers—e.g. which segment is customer X in?, what is their risk label and ERL bucket?, what action should I take for customer 12346?, segment and recommended action for these customers. Parameters: H_days (default: 365), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns segmentation only for those customers. If not provided, returns all customers with samples per segment (default behavior). This is a COMPREHENSIVE segmentation that combines both risk and lifetime - do NOT use for individual risk scores, probabilities, or lifetime values alone."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
@@ -574,7 +588,6 @@ def customer_segmentation_tool(H_days: int = 365, customer_id: Optional[Union[in
             transactions=transactions_df,
             covariates_df=cox_result['train_df'],
             cutoff_date=cutoff_date,
-            H_days=H_days,
         )
         
         # Filter by customer_id(s) if provided
@@ -676,7 +689,7 @@ tools = [
     score_churn_risk_tool,
     predict_churn_probability_tool,
     prioritize_retention_targets_tool,
-    expected_remaining_lifetime_tool,
+    compute_erl_days_tool,
     customer_segmentation_tool,
     execute_sql_query_tool,
 ]
@@ -720,7 +733,7 @@ DATA CONTEXT (CRITICAL)
 ========================
 - **Cutoff Date:** 2011-12-09 (All predictions are calculated as of this date).
 - **Churn Definition:** A customer is 'churned' if they have made NO purchases for INACTIVITY_DAYS consecutive days as of the cutoff date.
-- **Future Dates:** You do NOT have future transactions. When asked "when will they churn", estimate using `expected_remaining_lifetime_tool` + the cutoff date.
+- **Future Dates:** You do NOT have future transactions. When asked "when will they churn", estimate using `compute_erl_days_tool` + the cutoff date.
 
 ========================
 TOOL SELECTION HIERARCHY
@@ -733,8 +746,8 @@ TOOL SELECTION HIERARCHY
    - **Why:** Correct when BOTH value and churn likelihood matter.
 
 2. **customer_segmentation_tool**
-   - **Trigger:** "Segment my customers", "Analyze the customer base", "What actions should I take?".
-   - **Why:** Combines Risk and Lifetime into actionable strategic buckets.
+   - **Trigger:** "Segment my customers", "Analyze the customer base", "What actions should I take?"; or questions about a **specific customer or group of customers**: "What segment is customer X in?", "Which segment are these customers in?", "What action for customer 12346?", "Risk and lifetime bucket for this customer.", "What should we do for customers A and B?".
+   - **Why:** Combines Risk and Lifetime into actionable strategic buckets. Use for questions about one or more specific customers (segment, risk label, ERL bucket, recommended action).
 
 ### LEVEL 2: SPECIFIC PREDICTIONS
 
@@ -750,7 +763,7 @@ TOOL SELECTION HIERARCHY
    - **Trigger:** "Probability", "likelihood", "chance", "% of churn".
    - **Note:** Returns 0–1 probability.
 
-6. **expected_remaining_lifetime_tool**
+6. **compute_erl_days_tool**
    - **Trigger:** "How long will they stay?", "Days until churn", "When will they leave?".
    - **Critical:** "Soonest churn" → `order="ascending"`.
 
@@ -768,7 +781,7 @@ AMBIGUITY RESOLUTION
   - If asking for ACTION ("who to save") → **prioritize_retention_targets_tool**
   - If asking for LIST/RANKING ("who is risky") → **score_churn_risk_tool**
 - "Most likely to churn" →
-  - If Time-based ("soonest") → **expected_remaining_lifetime_tool** (order="ascending")
+  - If Time-based ("soonest") → **compute_erl_days_tool** (order="ascending")
   - If Probability-based ("likelihood") → **predict_churn_probability_tool**
 
 ========================

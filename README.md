@@ -60,18 +60,19 @@ The application includes sophisticated analytics modules for deep customer insig
 - **Cox Proportional Hazards Model** - Identifies factors affecting customer churn risk
 - **Kaplan-Meier Estimation** - Non-parametric survival curve analysis
 - **Customer Risk Scoring** - Leakage-free risk scoring and ranking system
-- **Expected Remaining Lifetime** - Predicts how long customers will remain active
+- **Expected Remaining Lifetime (ERL)** - Monte Carlo simulation (BG/NBD) predicts expected days until churn; active customers only (ERL > 0)
 - **Churn Probability** - Estimates probability of churn within specified time horizons
 
 ### Customer Segmentation
 
-- **Risk-Based Segmentation** - High/Medium/Low risk customer categorization
-- **Lifetime-Based Segmentation** - Short/Medium/Long expected lifetime buckets
-- **Multi-Dimensional Segmentation** - Combines risk and lifetime for actionable insights
-- **Actionable Recommendations** - Segment-specific action tags and recommended strategies
+- **Risk-Based Segmentation** - High/Medium/Low risk from Cox model
+- **ERL-Based Buckets** - Fixed thresholds: **At-Risk** (0–90 days), **Stable** (91–270), **Valued** (271–720), **VIP** (>720 days)
+- **12 Segments** - Combines risk (High/Medium/Low) and ERL bucket (At-Risk, Stable, Valued, VIP), e.g. `High/At-Risk`, `Medium/Valued`, `Low/VIP`
+- **Actionable Recommendations** - Segment-specific action tags and recommended strategies (e.g. Urgent_Winback, VIP_Protect, Maximize_LTV)
 
 ### Advanced Analytics Capabilities
 
+- **Monte Carlo ERL** - Expected remaining lifetime in days via BG/NBD simulation (business-defined churn: inactivity window)
 - **Covariate Analysis** - Examines purchase frequency, monetary value, product diversity, and geographic factors
 - **Model Validation** - Comprehensive validation metrics including concordance index and calibration
 - **Time-to-Event Modeling** - Analyzes customer tenure, recency, and churn events
@@ -86,7 +87,7 @@ assistant/
 │   │   ├── main.py      # FastAPI routes and endpoints
 │   │   ├── db.py        # Database utilities
 │   │   └── llm_langchain.py  # LangChain AI agent
-│   ├── analytics/       # Analytics modules (CLV, survival analysis)
+│   ├── analytics/       # Analytics modules (CLV, survival, Monte Carlo ERL)
 │   ├── etl/             # Data loading scripts
 │   ├── data/            # Data files (CSV, SQLite)
 │   ├── requirements.txt # Python dependencies

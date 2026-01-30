@@ -13,11 +13,46 @@ from analytics.survival import (
     score_customers,
     predict_churn_probability,
     prioritize_retention_targets,
-    expected_remaining_lifetime,
     build_segmentation_table,
     CUTOFF_DATE,
     INACTIVITY_DAYS,
 )
+from analytics.monte_carlo import compute_erl_days
+
+
+def _build_expected_lifetimes_df(
+    df: pd.DataFrame,
+    cutoff_date: str,
+    inactivity_days: int,
+    H_days: int = 365,
+) -> pd.DataFrame:
+    """Build expected lifetimes DataFrame (Monte Carlo ERL) with columns customer_id, t0, H_days, expected_remaining_life_days."""
+    rfm = build_rfm(df, cutoff_date)
+    df = df.copy()
+    df["invoice_date"] = pd.to_datetime(df["invoice_date"])
+    cutoff_dt = pd.to_datetime(cutoff_date)
+    last_purchases = (
+        df[df["invoice_date"] <= cutoff_dt]
+        .groupby("customer_id")["invoice_date"]
+        .max()
+        .reset_index()
+    )
+    last_purchases.columns = ["customer_id", "last_purchase_date"]
+    last_purchases["last_purchase_date"] = last_purchases["last_purchase_date"].dt.strftime("%Y-%m-%d")
+    customer_summary = rfm.reset_index().merge(last_purchases, on="customer_id", how="left")
+    clv_result = fit_models(rfm)
+    erl_result = compute_erl_days(
+        bgf=clv_result.bgnbd,
+        customer_summary_df=customer_summary,
+        cutoff_date=cutoff_date,
+        INACTIVITY_DAYS=inactivity_days,
+    )
+    expected_lifetimes = erl_result.merge(
+        customer_summary[["customer_id", "T"]], on="customer_id", how="left"
+    ).rename(columns={"ERL_days": "expected_remaining_life_days", "T": "t0"})
+    expected_lifetimes["H_days"] = H_days
+    return expected_lifetimes
+
 
 app = FastAPI(title="Retail Data Assistant API", version="0.1")
 
@@ -279,33 +314,13 @@ def execute_analytics_function(
             "answer": answer
         }
     
-    elif function_name == "expected_remaining_lifetime":
-        # Fixed cutoff_date and inactivity_days, H_days is optional (default 365)
+    elif function_name == "compute_erl_days":
         cutoff_date = FIXED_CUTOFF_DATE
         inactivity_days = FIXED_INACTIVITY_DAYS
         H_days = parameters.get("H_days", 365)
-        
-        cov = build_covariate_table(
-            transactions=transactions_df,
-            cutoff_date=cutoff_date,
-            inactivity_days=inactivity_days,
-        ).df
-        
-        cox_result = fit_cox_baseline(
-            covariates=cov,
-            covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-            train_frac=1.0,
-            random_state=42,
-            penalizer=0.1,
+        expected_lifetimes = _build_expected_lifetimes_df(
+            transactions_df, cutoff_date, inactivity_days, H_days
         )
-        
-        expected_lifetimes = expected_remaining_lifetime(
-            model=cox_result['model'],
-            covariates_df=cov,
-            H_days=H_days,
-            inactivity_days=inactivity_days,
-        )
-        
         columns = ["customer_id", "t0", "H_days", "expected_remaining_life_days"]
         rows = expected_lifetimes[columns].to_dict(orient="records")
         
@@ -346,10 +361,9 @@ def execute_analytics_function(
             transactions=transactions_df,
             covariates_df=cov,
             cutoff_date=cutoff_date,
-            H_days=H_days,
         )
         
-        columns = ["customer_id", "risk_label", "t0", "erl_365_days", 
+        columns = ["customer_id", "risk_label", "t0", "erl_days", 
                   "life_bucket", "segment", "action_tag", "recommended_action"]
         rows = segmentation_df[columns].to_dict(orient="records")
         
@@ -662,10 +676,10 @@ def churn_probability_endpoint(
 def expected_lifetime_endpoint(
     inactivity_days: int = Query(INACTIVITY_DAYS, description="Inactivity days threshold for churn definition"),
     cutoff_date: str = Query(CUTOFF_DATE, description="Cutoff date for computation (YYYY-MM-DD)"),
-    H_days: int = Query(365, ge=1, le=3650, description="Horizon in days for restricted expectation"),
+    H_days: int = Query(365, ge=1, le=3650, description="Horizon in days (nominal; reported in response)"),
 ) -> ExpectedLifetimeResponse:
     """
-    Compute restricted expected remaining lifetime for active customers.
+    Compute expected remaining lifetime in days (Monte Carlo, BG/NBD).
     """
     sql = """
     SELECT customer_id, invoice_no, invoice_date, revenue, stock_code, country
@@ -674,31 +688,7 @@ def expected_lifetime_endpoint(
     """
     rows, _ = run_query_internal(sql, max_rows=2_000_000)
     df = pd.DataFrame(rows)
-
-    # Build covariate table for model fitting
-    cov = build_covariate_table(
-        transactions=df,
-        cutoff_date=cutoff_date,
-        inactivity_days=inactivity_days,
-    ).df
-
-    # Fit Cox model with standard covariates
-    cox_result = fit_cox_baseline(
-        covariates=cov,
-        covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-        train_frac=1.0,
-        random_state=42,
-        penalizer=0.1,
-    )
-    cox_model = cox_result['model']
-
-    # Compute expected remaining lifetime
-    expected_lifetimes = expected_remaining_lifetime(
-        model=cox_model,
-        covariates_df=cov,
-        H_days=H_days,
-        inactivity_days=inactivity_days,
-    )
+    expected_lifetimes = _build_expected_lifetimes_df(df, cutoff_date, inactivity_days, H_days)
 
     # Create summary
     summary = {
@@ -760,7 +750,6 @@ def segmentation_endpoint(
         transactions=df,
         covariates_df=cov,
         cutoff_date=cutoff_date,
-        H_days=H_days,
     )
 
     # Create summary
@@ -770,8 +759,8 @@ def segmentation_endpoint(
         "risk_label_counts": segmentation_df['risk_label'].value_counts().to_dict(),
         "life_bucket_counts": segmentation_df['life_bucket'].value_counts().to_dict(),
         "action_tag_counts": segmentation_df['action_tag'].value_counts().to_dict(),
-        "erl_mean": float(segmentation_df['erl_365_days'].mean()),
-        "erl_median": float(segmentation_df['erl_365_days'].median()),
+        "erl_mean": float(segmentation_df['erl_days'].mean()),
+        "erl_median": float(segmentation_df['erl_days'].median()),
     }
 
     return SegmentationResponse(
