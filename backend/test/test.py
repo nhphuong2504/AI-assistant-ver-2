@@ -1,75 +1,177 @@
-"""
-Test script: run expected_remaining_lifetime and print results.
-"""
-import sys
+import pandas as pd
+import numpy as np
 from pathlib import Path
+import sys
 
+# Add parent directory to path to import analytics module
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import pandas as pd
+from analytics.monte_carlo import compute_erl_days
+from analytics.clv import build_rfm, fit_models
 from app.db import run_query_internal
-from analytics.survival import (
-    build_covariate_table,
-    fit_cox_baseline,
-    expected_remaining_lifetime,
-)
 
-# Load data, build cov, fit Cox
-print("Loading data...")
-sql = """SELECT customer_id, invoice_no, invoice_date, revenue, stock_code, country
-         FROM transactions WHERE customer_id IS NOT NULL"""
-rows, _ = run_query_internal(sql, max_rows=2_000_000)
-df = pd.DataFrame(rows)
-cov = build_covariate_table(df, cutoff_date="2011-12-09", inactivity_days=90).df
 
-cox = fit_cox_baseline(
-    covariates=cov,
-    covariate_cols=["n_orders", "log_monetary_value", "product_diversity"],
-    train_frac=1.0,
-)
-model = cox["model"]
-H_days = 365
+def test_monte_carlo_basic():
+    """Test compute_erl_days with basic synthetic data."""
+    from lifetimes import BetaGeoFitter
+    
+    # Create synthetic customer data
+    customer_summary = pd.DataFrame({
+        "customer_id": ["C1", "C2", "C3", "C4", "C5"],
+        "frequency": [0.0, 1.0, 2.0, 3.0, 5.0],
+        "recency": [0.0, 10.0, 30.0, 60.0, 90.0],
+        "T": [30.0, 40.0, 60.0, 90.0, 120.0],
+        "last_purchase_date": ["2023-02-15", "2023-02-25", "2023-03-15", "2023-04-15", "2023-05-15"]
+    })
+    
+    # Fit a simple BG/NBD model
+    bgf = BetaGeoFitter(penalizer_coef=0.05)
+    bgf.fit(customer_summary["frequency"], customer_summary["recency"], customer_summary["T"])
+    
+    # Test compute_erl_days
+    cutoff_date = "2023-06-01"
+    INACTIVITY_DAYS = 90
+    
+    result = compute_erl_days(
+        bgf=bgf,
+        customer_summary_df=customer_summary,
+        cutoff_date=cutoff_date,
+        INACTIVITY_DAYS=INACTIVITY_DAYS,
+        N=100,  # Smaller N for faster testing
+        seed=42
+    )
+    
+    # Check structure
+    assert isinstance(result, pd.DataFrame)
+    assert "customer_id" in result.columns
+    assert "ERL_days" in result.columns
+    assert "prob_alive" in result.columns
+    assert len(result) == len(customer_summary)
+    
+    # Check that ERL_days is non-negative
+    assert (result["ERL_days"] >= 0).all()
+    
+    print("✓ test_monte_carlo_basic passed")
+    print(f"  Result shape: {result.shape}")
+    print(f"  ERL_days range: {result['ERL_days'].min():.2f} - {result['ERL_days'].max():.2f}")
+    print(f"  Mean ERL_days: {result['ERL_days'].mean():.2f}")
+    print("\nSample results:")
+    print(result.head())
 
-# Compute expected remaining lifetime
-print("\n" + "=" * 60)
-print("EXPECTED REMAINING LIFETIME — RESULTS")
-print("=" * 60)
 
-erl = expected_remaining_lifetime(
-    model=model,
-    covariates_df=cov,
-    H_days=H_days,
-)
+def test_monte_carlo_real_data():
+    """Test compute_erl_days with real data from database."""
+    print("\n" + "="*60)
+    print("TESTING MONTE CARLO ON REAL DATA")
+    print("="*60)
+    
+    # Load transactions from SQLite
+    sql = """
+    SELECT customer_id, invoice_no, invoice_date, revenue
+    FROM transactions
+    WHERE customer_id IS NOT NULL
+    """
+    rows, _ = run_query_internal(sql, max_rows=2_000_000)
+    df = pd.DataFrame(rows)
+    
+    print(f"\nLoaded {len(df):,} transactions")
+    print(f"Date range: {df['invoice_date'].min()} to {df['invoice_date'].max()}")
+    
+    # Use a reasonable cutoff date
+    cutoff_date = "2011-12-09"
+    INACTIVITY_DAYS = 90
+    
+    # Build RFM table
+    print(f"\n--- Building RFM table with cutoff_date={cutoff_date} ---")
+    rfm = build_rfm(df, cutoff_date)
+    print(f"✓ RFM table created: {len(rfm):,} customers")
+    
+    # Fit BG/NBD model
+    print(f"\n--- Fitting BG/NBD model ---")
+    clv_result = fit_models(rfm)
+    bgf = clv_result.bgnbd
+    print(f"✓ BG/NBD model fitted")
+    print(f"  Model parameters: {list(bgf.params_.keys())}")
+    
+    # Prepare customer summary with last_purchase_date
+    # We need to get last_purchase_date from the original transactions
+    df["invoice_date"] = pd.to_datetime(df["invoice_date"])
+    cutoff_dt = pd.to_datetime(cutoff_date)
+    
+    # Get last purchase date per customer (before cutoff)
+    last_purchases = (
+        df[df["invoice_date"] <= cutoff_dt]
+        .groupby("customer_id")["invoice_date"]
+        .max()
+        .reset_index()
+    )
+    last_purchases.columns = ["customer_id", "last_purchase_date"]
+    
+    # Merge with RFM data
+    customer_summary = rfm.reset_index().merge(last_purchases, on="customer_id", how="left")
+    
+    # Convert last_purchase_date to string format
+    customer_summary["last_purchase_date"] = customer_summary["last_purchase_date"].dt.strftime("%Y-%m-%d")
+    
+    print(f"\n--- Customer summary prepared: {len(customer_summary):,} customers ---")
+    print(f"  Customers with last_purchase_date: {customer_summary['last_purchase_date'].notna().sum():,}")
+    
+    # Run Monte Carlo simulation
+    print(f"\n--- Running Monte Carlo simulation (INACTIVITY_DAYS={INACTIVITY_DAYS}) ---")
+    result = compute_erl_days(
+        bgf=bgf,
+        customer_summary_df=customer_summary,
+        cutoff_date=cutoff_date,
+        INACTIVITY_DAYS=INACTIVITY_DAYS,
+        N=1000,  # Number of simulations
+        seed=42,
+        max_days=1825  # 5 years max
+    )
+    
+    print(f"✓ Monte Carlo simulation completed")
+    print(f"\n--- Results Summary ---")
+    print(f"Total customers: {len(result):,}")
+    print(f"Customers with ERL_days > 0: {(result['ERL_days'] > 0).sum():,}")
+    print(f"Customers already churned (ERL_days = 0): {(result['ERL_days'] == 0).sum():,}")
+    
+    print(f"\nERL_days Statistics:")
+    print(result["ERL_days"].describe())
+    
+    print(f"\nProb_alive Statistics:")
+    print(result["prob_alive"].describe())
+    
+    # Show top 10 customers by ERL_days
+    print(f"\n--- Top 10 Customers by ERL_days ---")
+    top_10 = result.nlargest(10, "ERL_days")[
+        ["customer_id", "ERL_days", "prob_alive", "last_purchase_age_days"]
+    ]
+    print(top_10.to_string(index=False))
+    
+    # Show bottom 10 active customers by ERL_days (only customers with ERL_days > 0)
+    print(f"\n--- Bottom 10 Active Customers by ERL_days ---")
+    active_customers = result[result["ERL_days"] > 0].copy()
+    if len(active_customers) > 0:
+        bottom_10 = active_customers.nsmallest(10, "ERL_days")[
+            ["customer_id", "ERL_days", "prob_alive", "last_purchase_age_days"]
+        ]
+        print(bottom_10.to_string(index=False))
+    else:
+        print("No active customers found.")
+    
+    # Show random 10 customers
+    print(f"\n--- Random 10 Customers ---")
+    random_10 = result.sample(n=min(10, len(result)), random_state=42)[
+        ["customer_id", "ERL_days", "prob_alive", "last_purchase_age_days"]
+    ]
+    print(random_10.to_string(index=False))
+    
+    print("\n✅ Real data test completed successfully!")
 
-print(f"\nHorizon H_days: {H_days}")
-print(f"Active customers with ERL: {len(erl)}")
 
-# Beyond horizon: expected_remaining_life_days == -1 (VIP / low risk)
-beyond = erl[erl["expected_remaining_life_days"] == -1.0]
-in_range = erl[erl["expected_remaining_life_days"] >= 0]
+if __name__ == "__main__":
+    # Run basic test
+    test_monte_carlo_basic()
+    
+    # Run real data test
+    test_monte_carlo_real_data()
 
-print(f"  - Beyond model horizon (ERL = -1): {len(beyond)}")
-print(f"  - In-range (ERL in [0, H]):        {len(in_range)}")
-
-if len(in_range) > 0:
-    print("\nSummary (in-range only):")
-    print(in_range["expected_remaining_life_days"].describe().to_string())
-
-print("\n" + "-" * 60)
-print("Top 10 by expected_remaining_life_days (in-range):")
-top = in_range.head(10)[["customer_id", "t0", "H_days", "expected_remaining_life_days"]]
-print(top.to_string(index=False))
-
-print("\n" + "-" * 60)
-print("Bottom 10 by expected_remaining_life_days (in-range):")
-bottom = in_range.tail(10)[["customer_id", "t0", "H_days", "expected_remaining_life_days"]]
-print(bottom.to_string(index=False))
-
-if len(beyond) > 0:
-    print("\n" + "-" * 60)
-    print("Beyond model horizon (ERL = -1, sample up to 15):")
-    sample_beyond = beyond.head(15)[["customer_id", "t0", "H_days", "expected_remaining_life_days"]]
-    print(sample_beyond.to_string(index=False))
-
-print("\n" + "=" * 60)
-print("DONE")
