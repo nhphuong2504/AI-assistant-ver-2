@@ -496,8 +496,8 @@ def prioritize_retention_targets_tool(prediction_horizon: int = 90, limit_custom
 
 
 @tool
-def compute_erl_days_tool(H_days: int = 365, limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Compute EXPECTED REMAINING LIFETIME in days for active customers (how long they will stay). Returns expected_remaining_life_days (number of days), NOT probabilities or risk scores. Use this for: 'how long will customer X stay?', 'expected remaining lifetime', 'customer lifetime expectancy', 'how many days until churn', or 'remaining customer duration'. Returns expected_remaining_life_days (numeric days), t0 (current tenure), and H_days (horizon). Parameters: H_days (default: 365), limit_customers (default: 10), order (default: "descending"; use "ascending" for shortest/least remaining lifetime), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by expected remaining life: descending = longest first; ascending = shortest first. Do NOT use for probability or risk ranking questions."""
+def compute_erl_days_tool(limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
+    """Compute EXPECTED REMAINING LIFETIME in days for active customers (how long they will stay). Returns expected_remaining_life_days (number of days), NOT probabilities or risk scores. Use this for: 'how long will customer X stay?', 'expected remaining lifetime', 'customer lifetime expectancy', 'how many days until churn', or 'remaining customer duration'. Returns expected_remaining_life_days (numeric days), t0 (current tenure), and is_already_churned (boolean flag). Note: Customers with 0 days expected remaining lifetime are already churned (no purchases for 90+ days as of cutoff date). Parameters: limit_customers (default: 10), order (default: "descending"; use "ascending" for shortest/least remaining lifetime), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by expected remaining life: descending = longest first; ascending = shortest first. Do NOT use for probability or risk ranking questions."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
@@ -525,6 +525,11 @@ def compute_erl_days_tool(H_days: int = 365, limit_customers: int = 10, order: s
         expected_lifetimes = erl_result.merge(
             customer_summary[["customer_id", "T"]], on="customer_id", how="left"
         ).rename(columns={"ERL_days": "expected_remaining_life_days", "T": "t0"})
+        
+        # Add flag to indicate if customer is already churned (ERL = 0 means already churned by business rule)
+        expected_lifetimes["is_already_churned"] = (
+            expected_lifetimes["expected_remaining_life_days"] == 0.0
+        )
 
         # Filter by customer_id(s) if provided
         if customer_id is not None or customer_ids is not None:
@@ -542,24 +547,43 @@ def compute_erl_days_tool(H_days: int = 365, limit_customers: int = 10, order: s
             else:
                 warning = None
         else:
-            # Default behavior: top N by expected remaining life (order: descending=longest first, ascending=shortest first)
-            expected_lifetimes = expected_lifetimes.sort_values("expected_remaining_life_days", ascending=(order == "ascending")).head(limit_customers)
+            # Default behavior: Filter out already churned customers, then sort and return top N
+            # This ensures "most likely to churn soonest" returns active customers only
+            active_only = expected_lifetimes[~expected_lifetimes["is_already_churned"]].copy()
+            
+            if len(active_only) == 0:
+                return json.dumps({
+                    "status": "error",
+                    "error": "No active customers found. All customers are already churned.",
+                    "error_type": "NoActiveCustomersError"
+                })
+            
+            expected_lifetimes = active_only.sort_values("expected_remaining_life_days", ascending=(order == "ascending")).head(limit_customers)
             found_ids = []
             not_found_ids = []
             warning = None
 
+        # Calculate summary statistics (excluding already churned customers for mean/median)
+        active_customers = expected_lifetimes[~expected_lifetimes["is_already_churned"]]
+        already_churned_count = int(expected_lifetimes["is_already_churned"].sum())
+        
         result = {
             "status": "success",
             "total_customers": len(expected_lifetimes),
-            "H_days": H_days,
             "summary": {
                 "mean_expected_lifetime_days": float(expected_lifetimes["expected_remaining_life_days"].mean()),
                 "max_expected_lifetime_days": float(expected_lifetimes["expected_remaining_life_days"].max()),
                 "min_expected_lifetime_days": float(expected_lifetimes["expected_remaining_life_days"].min()),
                 "median_expected_lifetime_days": float(expected_lifetimes["expected_remaining_life_days"].median()),
+                "already_churned_count": already_churned_count,
+                "active_customers_count": len(active_customers),
             },
-            "customers": expected_lifetimes[["customer_id", "expected_remaining_life_days", "t0"]].to_dict(orient="records")
+            "customers": expected_lifetimes[["customer_id", "expected_remaining_life_days", "t0", "is_already_churned"]].to_dict(orient="records")
         }
+        
+        # Add note if there are already churned customers
+        if already_churned_count > 0:
+            result["note"] = f"{already_churned_count} customer(s) have 0 days expected remaining lifetime, meaning they are already churned (no purchases for {inactivity_days}+ days as of cutoff date {cutoff_date})."
         
         if warning:
             result["warning"] = warning
@@ -647,7 +671,7 @@ def customer_segmentation_tool(H_days: int = 365, customer_id: Optional[Union[in
 
 @tool
 def execute_sql_query_tool(sql: str, explanation: str = "") -> str:
-    """Execute a SQL SELECT query to answer questions about historical data, aggregations, filtering, reporting, or data exploration. Use this for descriptive questions that don't require predictive modeling, such as: revenue by country, top customers, sales trends, product analysis, or any data aggregation/filtering questions. Parameters: sql (required, SQL SELECT query), explanation (optional, description of query)."""
+    """Execute a SQL SELECT query to answer questions about historical data, aggregations, filtering, reporting, or data exploration. Use this for descriptive questions that don't require predictive modeling, such as: how many customers do we have?, how many orders?, revenue by country, top customers, sales trends, product analysis, or any data aggregation/filtering questions. Parameters: sql (required, SQL SELECT query), explanation (optional, description of query)."""
     try:
         validate_sql(sql)
         rows, cols = run_query(sql, limit=1000)
@@ -770,7 +794,7 @@ TOOL SELECTION HIERARCHY
 ### LEVEL 3: HISTORICAL & DESCRIPTIVE
 
 7. **execute_sql_query_tool**
-   - **Trigger:** Historical reporting and aggregation.
+   - **Trigger:** Historical reporting,aggregation, and COUNTING questions. 
    - **Limit:** NEVER use for predictions.
 
 ========================
@@ -800,10 +824,9 @@ DATABASE SCHEMA
 ========================
 RESPONSE SYNTHESIS
 ========================
-1. **Direct Answer:** Answer the question in the FIRST sentence.
-2. **Context:** Brief explanation of what the metric means relative to the **2011-12-09 cutoff**.
-3. **Action:** Suggest next steps if risk/value is high (e.g., "Check segmentation for actions").
-4. **Formatting:** Use small bulleted lists for "Top N" requests. Never dump raw JSON.
+1. **Direct Answer:** Start immediately with the answer or key insight. Do not bury the conclusion.
+2. **Context:** Briefly contextualize the metric relative to the analysis cutoff date (2011-12-09). Clarify if the insight is retrospective (past performance) or prospective (forecasted risk/value).
+3. **Formatting:** Lists: Use concise bullet points for rankings or "Top N" requests. Avoid raw JSON or unformatted code dumps; present data in clean text or markdown tables.
 """
 
 

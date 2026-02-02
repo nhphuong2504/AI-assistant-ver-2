@@ -141,6 +141,14 @@ export function ChatContainer() {
               <Button
                 variant="outline"
                 className="justify-start text-left h-auto py-3 px-4 text-sm font-normal hover:bg-accent hover:text-accent-foreground whitespace-normal break-words"
+                onClick={() => handleSend("Provide an estimate of the expected remaining lifetime for customer 16444.")}
+                disabled={isLoading}
+              >
+                Provide an estimate of the expected remaining lifetime for customer 16444.
+              </Button>
+              <Button
+                variant="outline"
+                className="justify-start text-left h-auto py-3 px-4 text-sm font-normal hover:bg-accent hover:text-accent-foreground whitespace-normal break-words"
                 onClick={() => handleSend("If the retention budget is only sufficient to target 20% of the customer base, which 20% should be selected to maximize business value?")}
                 disabled={isLoading}
               >
