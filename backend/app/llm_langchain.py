@@ -13,6 +13,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain.agents import create_agent
+from langchain_community.callbacks import get_openai_callback
 from langgraph.checkpoint.memory import MemorySaver
 from openai import RateLimitError, APIError, APIConnectionError, APITimeoutError
 import pandas as pd
@@ -313,57 +314,85 @@ def predict_clv_tool(horizon_days: int = 90, limit_customers: int = 10, order: s
 
 @tool
 def score_churn_risk_tool(limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Rank and score customers by relative churn risk (risk_score, risk_rank, risk_bucket: High/Medium/Low). Returns RISK SCORES for ranking/prioritization, NOT probabilities. Use this for: ranking customers by risk, identifying high-risk customers, risk-based prioritization, or which customers need attention first. Returns risk_score (higher = higher risk), risk_rank, risk_percentile, and risk_bucket. Parameters: limit_customers (default: 10), order (default: "descending"; use "ascending" for lowest/safest risk), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns scores only for those customers. If not provided, returns top N by risk: descending = highest risk first; ascending = lowest risk first. Do NOT use for probability questions."""
+    """Rank and score ACTIVE customers by relative churn risk (risk_score, risk_rank, risk_bucket: High/Medium/Low). Already churned customers (no purchases for 90+ days as of cutoff) are skipped and labeled as 'already_churned' in the response; risk is computed for active customers only. Returns RISK SCORES for ranking/prioritization, NOT probabilities. Use for: ranking by risk, high-risk customers, risk-based prioritization. Returns risk_score, risk_rank, risk_percentile, risk_bucket, plus already_churned_count and already_churned_customer_ids. Parameters: limit_customers (default: 10), order (default: "descending"; use "ascending" for lowest risk), customer_id (optional), customer_ids (optional). Do NOT use for probability questions."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
         inactivity_days = INACTIVITY_DAYS
         
         cox_result = get_or_fit_cox_model(transactions_df, cutoff_date, inactivity_days)
-        
+        train_df = cox_result["train_df"]
+        churned_ids = set(train_df.loc[train_df["event"] == 1, "customer_id"].astype(int).tolist())
+
+        # Score active customers only (already churned are skipped and labeled)
         scored = score_customers(
-            model=cox_result['model'],
+            model=cox_result["model"],
             transactions=transactions_df,
             cutoff_date=cutoff_date,
+            covariate_df=train_df,
         )
-        
+
         # Filter by customer_id(s) if provided
+        result_note_extra = ""
         if customer_id is not None or customer_ids is not None:
-            scored, found_ids, not_found_ids = filter_by_customer_ids(scored, customer_id, customer_ids)
-            
-            if len(scored) == 0:
+            if customer_id is not None:
+                target_ids = [customer_id]
+            else:
+                target_ids = list(customer_ids)
+            target_ids_int = []
+            for cid in target_ids:
+                try:
+                    target_ids_int.append(int(cid))
+                except (TypeError, ValueError):
+                    pass
+            churned_requested = [c for c in target_ids_int if c in churned_ids]
+            active_requested = [c for c in target_ids_int if c not in churned_ids]
+            scored, found_ids, not_found_ids = filter_by_customer_ids(scored, customer_ids=active_requested)
+
+            if len(scored) == 0 and len(churned_requested) == 0:
                 return json.dumps({
                     "status": "error",
                     "error": f"Customer(s) not found: {not_found_ids}",
                     "error_type": "NotFoundError"
                 })
-            
+
             if len(not_found_ids) > 0:
                 warning = f"Warning: Some customers not found: {not_found_ids}. Returning results for found customers: {found_ids}"
             else:
                 warning = None
+            already_churned_in_response = churned_requested
+            already_churned_count_val = len(already_churned_in_response)
         else:
             # Default behavior: top N by risk (order: descending=highest risk first, ascending=lowest/safest first)
             scored = scored.sort_values("risk_score", ascending=(order == "ascending")).head(limit_customers)
             found_ids = []
             not_found_ids = []
             warning = None
+            # When no filter, cap listed IDs to avoid huge payloads
+            _churned_list = list(churned_ids)
+            already_churned_in_response = _churned_list[:500]
+            already_churned_count_val = len(_churned_list)
+            if len(_churned_list) > 500:
+                result_note_extra = f" (showing first 500 of {len(_churned_list)} already-churned customers)"
 
-        high_risk = (scored["risk_bucket"] == "High").sum()
-        medium_risk = (scored["risk_bucket"] == "Medium").sum()
-        low_risk = (scored["risk_bucket"] == "Low").sum()
-        
+        high_risk = (scored["risk_bucket"] == "High").sum() if len(scored) > 0 else 0
+        medium_risk = (scored["risk_bucket"] == "Medium").sum() if len(scored) > 0 else 0
+        low_risk = (scored["risk_bucket"] == "Low").sum() if len(scored) > 0 else 0
+
         result = {
             "status": "success",
             "total_customers": len(scored),
+            "already_churned_count": already_churned_count_val,
+            "already_churned_customer_ids": already_churned_in_response,
+            "note": "Churn risk is computed for active customers only. Already churned customers (no purchases for 90+ days as of cutoff) are listed above and not scored." + result_note_extra,
             "risk_distribution": {
                 "high_risk_count": int(high_risk),
                 "medium_risk_count": int(medium_risk),
                 "low_risk_count": int(low_risk),
             },
-            "customers": scored[["customer_id", "risk_score", "risk_rank", "risk_bucket", "risk_percentile"]].to_dict(orient="records")
+            "customers": scored[["customer_id", "risk_score", "risk_rank", "risk_bucket", "risk_percentile"]].to_dict(orient="records") if len(scored) > 0 else []
         }
-        
+
         if warning:
             result["warning"] = warning
         if found_ids:
@@ -670,8 +699,42 @@ def customer_segmentation_tool(H_days: int = 365, customer_id: Optional[Union[in
 
 
 @tool
+def get_customer_counts_tool() -> str:
+    """Return total number of customers, number of churned customers, and number of active (not churned) customers as of the cutoff date. Use this for: 'how many customers do we have?', 'how many churned?', 'how many active?', 'how many have not churned?', 'total/churned/active customer counts'. Churn is defined as no purchases for 90+ days as of cutoff 2011-12-09. Returns total_customers, churned_customers, active_customers (total = churned + active). No parameters."""
+    try:
+        transactions_df = get_transactions_df()
+        cov_result = build_covariate_table(
+            transactions=transactions_df,
+            cutoff_date=CUTOFF_DATE,
+            inactivity_days=INACTIVITY_DAYS,
+        )
+        cov = cov_result.df
+        total = len(cov)
+        churned = int((cov["event"] == 1).sum())
+        active = int((cov["event"] == 0).sum())
+        result = {
+            "status": "success",
+            "total_customers": total,
+            "churned_customers": churned,
+            "active_customers": active,
+            "cutoff_date": CUTOFF_DATE,
+            "inactivity_days": INACTIVITY_DAYS,
+            "note": "Churned = no purchases for 90+ days as of cutoff. Active = not churned. total_customers = churned_customers + active_customers.",
+        }
+        return json.dumps(result, indent=2, default=str)
+    except FileNotFoundError as e:
+        return json.dumps({
+            "status": "error",
+            "error": str(e),
+            "error_type": "FileNotFoundError",
+        })
+    except Exception as e:
+        return json.dumps({"status": "error", "error": str(e), "error_type": type(e).__name__})
+
+
+@tool
 def execute_sql_query_tool(sql: str, explanation: str = "") -> str:
-    """Execute a SQL SELECT query to answer questions about historical data, aggregations, filtering, reporting, or data exploration. Use this for descriptive questions that don't require predictive modeling, such as: how many customers do we have?, how many orders?, revenue by country, top customers, sales trends, product analysis, or any data aggregation/filtering questions. Parameters: sql (required, SQL SELECT query), explanation (optional, description of query)."""
+    """Execute a SQL SELECT query for historical data, aggregations, and counting. ALWAYS use this tool for: 'how many customers do we have?', 'how many orders?', 'count of X', 'number of customers/orders/invoices', revenue by country, top customers, sales trends, product analysis, or any aggregation/filtering. Other tools (CLV, risk, segmentation, etc.) return 'total_customers' as the size of the result set (e.g. top 10), NOT the total in the database—for total counts use this tool with a COUNT query. Parameters: sql (required, SQL SELECT query), explanation (optional)."""
     try:
         validate_sql(sql)
         rows, cols = run_query(sql, limit=1000)
@@ -715,6 +778,7 @@ tools = [
     prioritize_retention_targets_tool,
     compute_erl_days_tool,
     customer_segmentation_tool,
+    get_customer_counts_tool,
     execute_sql_query_tool,
 ]
 
@@ -758,6 +822,7 @@ DATA CONTEXT (CRITICAL)
 - **Cutoff Date:** 2011-12-09 (All predictions are calculated as of this date).
 - **Churn Definition:** A customer is 'churned' if they have made NO purchases for 90 consecutive days as of the cutoff date.
 - **Future Dates:** You do NOT have future transactions. When asked "when will they churn", estimate using `compute_erl_days_tool` + the cutoff date.
+- Money values are in GBP (British Pounds).
 
 ========================
 TOOL SELECTION HIERARCHY
@@ -793,9 +858,13 @@ TOOL SELECTION HIERARCHY
 
 ### LEVEL 3: HISTORICAL & DESCRIPTIVE
 
-7. **execute_sql_query_tool**
-   - **Trigger:** Historical reporting,aggregation, and COUNTING questions. 
-   - **Limit:** NEVER use for predictions.
+7. **get_customer_counts_tool**
+   - **Trigger:** "How many customers do we have?", "How many churned?", "How many active / not churned?", "Total/churned/active customer counts".
+   - **Why:** Returns total_customers, churned_customers, active_customers (total = churned + active) from the same cohort. Use this for consistent total/churned/active numbers.
+
+8. **execute_sql_query_tool**
+   - **Trigger:** Historical reporting, aggregation, and other COUNTING (e.g. orders, invoices, revenue by country).
+   - **Limit:** NEVER use for predictions. For total/churned/active customer counts use **get_customer_counts_tool** instead.
 
 ========================
 AMBIGUITY RESOLUTION
@@ -825,7 +894,7 @@ DATABASE SCHEMA
 RESPONSE SYNTHESIS
 ========================
 1. **Direct Answer:** Start immediately with the answer or key insight. Do not bury the conclusion.
-2. **Context:** Briefly contextualize the metric relative to the analysis cutoff date (2011-12-09). Clarify if the insight is retrospective (past performance) or prospective (forecasted risk/value).
+2. **Context:** Briefly contextualize the metric relative to the analysis cutoff date (2011-12-09). Clarify if the insight is retrospective (past performance) or prospective (forecasted risk/value). Explain briefly the logic of the analysis.
 3. **Formatting:** Lists: Use concise bullet points for rankings or "Top N" requests. Avoid raw JSON or unformatted code dumps; present data in clean text or markdown tables.
 """
 
@@ -867,12 +936,20 @@ def ask_question(question: str, use_memory: bool = True, thread_id: str = "defau
             # Use a temporary thread_id that won't persist
             config = {"configurable": {"thread_id": f"temp_{uuid.uuid4().hex[:8]}"}}
         
-        # Invoke agent with proper configuration
-        response = agent_executor.invoke(
-            {"messages": [HumanMessage(content=question)]},
-            config=config
+        # Invoke agent with proper configuration and track token usage
+        with get_openai_callback() as cb:
+            response = agent_executor.invoke(
+                {"messages": [HumanMessage(content=question)]},
+                config=config
+            )
+
+        # Print token usage for this request
+        print(
+            f"Token usage - prompt: {cb.prompt_tokens}, completion: {cb.completion_tokens}, "
+            f"total: {cb.total_tokens}"
+            + (f", cost: ${cb.total_cost:.4f}" if getattr(cb, "total_cost", None) is not None else "")
         )
-        
+
         # Extract the final answer from messages
         if isinstance(response, dict):
             messages = response.get("messages", [])

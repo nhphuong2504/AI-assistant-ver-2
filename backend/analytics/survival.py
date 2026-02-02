@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
-from typing import Tuple, Dict, Any, List
+from typing import Tuple, Dict, Any, List, Optional
 from lifelines import KaplanMeierFitter, CoxPHFitter
 from lifelines.utils import concordance_index
 
@@ -633,17 +633,22 @@ def score_customers(
     model: CoxPHFitter,
     transactions: pd.DataFrame,
     cutoff_date: str = CUTOFF_DATE,
+    covariate_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     Leakage-free scoring and ranking pipeline using a fitted Cox model.
     
     Computes risk scores for customers at a cutoff date using only historical data.
     Risk scores represent relative churn risk for prioritization, not probabilities.
+    If covariate_df is provided with an 'event' column, only active customers (event==0)
+    are scored; already churned customers (event==1) are excluded.
     
     Args:
         model: Fitted CoxPHFitter model (must NOT be refit)
         transactions: DataFrame with customer_id, invoice_no, invoice_date, revenue, stock_code
         cutoff_date: Cutoff date (inclusive) for feature computation (YYYY-MM-DD)
+        covariate_df: Optional covariate table with columns customer_id, event.
+            If provided, only customers with event==0 (active) are scored.
     
     Returns:
         DataFrame with columns:
@@ -713,6 +718,16 @@ def score_customers(
     
     # Drop rows with missing values in required features
     feature_df = feature_df.dropna(subset=["n_orders", "log_monetary_value", "product_diversity"])
+
+    # Restrict to active customers only if covariate table provided (event==0 = active)
+    if covariate_df is not None and "event" in covariate_df.columns and "customer_id" in covariate_df.columns:
+        active_ids = covariate_df.loc[covariate_df["event"] == 0, "customer_id"]
+        feature_df = feature_df[feature_df["customer_id"].isin(active_ids)].copy()
+        if len(feature_df) == 0:
+            return pd.DataFrame(columns=[
+                "customer_id", "n_orders", "log_monetary_value", "product_diversity",
+                "risk_score", "risk_rank", "risk_percentile", "risk_bucket",
+            ])
     
     # Step 2: Risk score computation using fitted model
     # Get covariate columns (must match model's expected covariates)
