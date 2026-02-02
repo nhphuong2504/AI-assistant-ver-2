@@ -2,17 +2,16 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
-from app.db import get_schema, run_query, run_query_internal
-from app.llm_langchain import ask_question, clear_memory
+from app.db import get_schema, run_query
+from app.llm_langchain import ask_question, clear_memory, get_or_fit_cox_model
+from app.data import get_transactions_df, get_clv_models
 import pandas as pd
-from analytics.clv import build_rfm, fit_models, predict_clv, PURCHASE_SCALE, REVENUE_SCALE
+from analytics.clv import predict_clv, PURCHASE_SCALE, REVENUE_SCALE
 from analytics.survival import (
     build_covariate_table,
     fit_km_all,
-    fit_cox_baseline,
     score_customers,
     predict_churn_probability,
-    prioritize_retention_targets,
     build_segmentation_table,
     CUTOFF_DATE,
     INACTIVITY_DAYS,
@@ -27,7 +26,8 @@ def _build_expected_lifetimes_df(
     H_days: int = 365,
 ) -> pd.DataFrame:
     """Build expected lifetimes DataFrame (Monte Carlo ERL) with columns customer_id, t0, H_days, expected_remaining_life_days."""
-    rfm = build_rfm(df, cutoff_date)
+    clv_result = get_clv_models(cutoff_date)
+    rfm = clv_result.rfm
     df = df.copy()
     df["invoice_date"] = pd.to_datetime(df["invoice_date"])
     cutoff_dt = pd.to_datetime(cutoff_date)
@@ -40,7 +40,6 @@ def _build_expected_lifetimes_df(
     last_purchases.columns = ["customer_id", "last_purchase_date"]
     last_purchases["last_purchase_date"] = last_purchases["last_purchase_date"].dt.strftime("%Y-%m-%d")
     customer_summary = rfm.reset_index().merge(last_purchases, on="customer_id", how="left")
-    clv_result = fit_models(rfm)
     erl_result = compute_erl_days(
         bgf=clv_result.bgnbd,
         customer_summary_df=customer_summary,
@@ -112,6 +111,8 @@ class ScoreCustomersResponse(BaseModel):
     cutoff_date: str
     inactivity_days: int
     n_customers: int
+    already_churned_count: int
+    already_churned_customer_ids: List[int]
     scored_customers: List[Dict[str, Any]]
     summary: Dict[str, Any]
 
@@ -169,274 +170,6 @@ def query(req: QueryRequest) -> QueryResponse:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def execute_analytics_function(
-    function_name: str,
-    parameters: Dict[str, Any],
-    transactions_df: pd.DataFrame
-) -> Dict[str, Any]:
-    """
-    Execute an analytics function and return results in a dictionary format.
-    Fixed values: cutoff_date="2011-12-09", inactivity_days=90 for most functions.
-    
-    Args:
-        function_name: Name of the analytics function to execute
-        parameters: Dictionary of function parameters
-        transactions_df: DataFrame with transaction data
-        
-    Returns:
-        Dictionary with: columns, rows, row_count, answer
-    """
-    # Fixed constants
-    FIXED_CUTOFF_DATE = "2011-12-09"
-    FIXED_INACTIVITY_DAYS = 90
-    
-    if function_name == "predict_customer_lifetime_value":
-        # Fixed cutoff_date at 2011-12-09
-        cutoff_date = FIXED_CUTOFF_DATE
-        horizon_days = parameters.get("horizon_days", 90)  # Required, but provide default
-        limit_customers = parameters.get("limit_customers", 10)  # Updated default to 10
-        
-        rfm = build_rfm(transactions_df, cutoff_date=cutoff_date)
-        models = fit_models(rfm)
-        
-        pred_unscaled = predict_clv(models, horizon_days=horizon_days, aov_fallback="global_mean")
-        pred_total_purchases = pred_unscaled["pred_purchases"].sum()
-        pred_total_revenue = pred_unscaled["clv"].sum(skipna=True)
-        
-        target_purchases = pred_total_purchases * PURCHASE_SCALE if PURCHASE_SCALE != 1.0 else None
-        target_revenue = pred_total_revenue * REVENUE_SCALE if REVENUE_SCALE != 1.0 else None
-        
-        pred = predict_clv(
-            models,
-            horizon_days=horizon_days,
-            scale_to_target_purchases=target_purchases,
-            scale_to_target_revenue=target_revenue,
-            aov_fallback="global_mean"
-        )
-        
-        pred = pred.sort_values("clv", ascending=False).head(limit_customers)
-        
-        columns = ["customer_id", "frequency", "recency", "T", "monetary_value", 
-                  "pred_purchases", "pred_aov", "clv"]
-        rows = pred[columns].to_dict(orient="records")
-        
-        answer = f"Predicted Customer Lifetime Value for {len(pred)} customers over {horizon_days} days (cutoff: {cutoff_date}). "
-        answer += f"Top customer CLV: {pred['clv'].max():.2f}, Mean CLV: {pred['clv'].mean():.2f}."
-        
-        return {
-            "columns": columns,
-            "rows": rows,
-            "row_count": len(rows),
-            "answer": answer
-        }
-    
-    elif function_name == "score_churn_risk":
-        # Fixed cutoff_date and inactivity_days
-        cutoff_date = FIXED_CUTOFF_DATE
-        inactivity_days = FIXED_INACTIVITY_DAYS
-        
-        cov = build_covariate_table(
-            transactions=transactions_df,
-            cutoff_date=cutoff_date,
-            inactivity_days=inactivity_days,
-        ).df
-        
-        cox_result = fit_cox_baseline(
-            covariates=cov,
-            covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-            train_frac=1.0,
-            random_state=42,
-            penalizer=0.1,
-        )
-        
-        scored = score_customers(
-            model=cox_result['model'],
-            transactions=transactions_df,
-            cutoff_date=cutoff_date,
-        )
-        
-        columns = ["customer_id", "n_orders", "log_monetary_value", "product_diversity",
-                  "risk_score", "risk_rank", "risk_percentile", "risk_bucket"]
-        rows = scored[columns].to_dict(orient="records")
-        
-        high_risk = (scored["risk_bucket"] == "High").sum()
-        answer = f"Scored {len(scored)} customers for churn risk (cutoff: {cutoff_date}, inactivity: {inactivity_days} days). "
-        answer += f"{high_risk} customers in High risk category."
-        
-        return {
-            "columns": columns,
-            "rows": rows,
-            "row_count": len(rows),
-            "answer": answer
-        }
-    
-    elif function_name == "predict_churn_probability":
-        # Fixed cutoff_date and inactivity_days, X_days is required (default 90)
-        cutoff_date = FIXED_CUTOFF_DATE
-        inactivity_days = FIXED_INACTIVITY_DAYS
-        X_days = parameters.get("X_days", 90)  # Required, but provide default
-        
-        cov = build_covariate_table(
-            transactions=transactions_df,
-            cutoff_date=cutoff_date,
-            inactivity_days=inactivity_days,
-        ).df
-        
-        cox_result = fit_cox_baseline(
-            covariates=cov,
-            covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-            train_frac=1.0,
-            random_state=42,
-            penalizer=0.1,
-        )
-        
-        predictions = predict_churn_probability(
-            model=cox_result['model'],
-            transactions=transactions_df,
-            cutoff_date=cutoff_date,
-            X_days=X_days,
-            inactivity_days=inactivity_days,
-        )
-        
-        columns = ["customer_id", "t0", "X_days", "churn_probability",
-                  "survival_at_t0", "survival_at_t0_plus_X"]
-        rows = predictions.to_dict(orient="records")
-        
-        mean_prob = predictions["churn_probability"].mean()
-        answer = f"Predicted churn probability for {len(predictions)} active customers. "
-        answer += f"Mean probability of churn in next {X_days} days: {mean_prob:.2%} "
-        answer += f"(cutoff: {cutoff_date}, inactivity: {inactivity_days} days)."
-        
-        return {
-            "columns": columns,
-            "rows": rows,
-            "row_count": len(rows),
-            "answer": answer
-        }
-    
-    elif function_name == "compute_erl_days":
-        cutoff_date = FIXED_CUTOFF_DATE
-        inactivity_days = FIXED_INACTIVITY_DAYS
-        H_days = parameters.get("H_days", 365)
-        expected_lifetimes = _build_expected_lifetimes_df(
-            transactions_df, cutoff_date, inactivity_days, H_days
-        )
-        columns = ["customer_id", "t0", "H_days", "expected_remaining_life_days"]
-        rows = expected_lifetimes[columns].to_dict(orient="records")
-        
-        mean_lifetime = expected_lifetimes["expected_remaining_life_days"].mean()
-        answer = f"Computed expected remaining lifetime for {len(expected_lifetimes)} active customers. "
-        answer += f"Mean expected remaining lifetime: {mean_lifetime:.2f} days "
-        answer += f"(cutoff: {cutoff_date}, inactivity: {inactivity_days} days, H: {H_days} days)."
-        
-        return {
-            "columns": columns,
-            "rows": rows,
-            "row_count": len(rows),
-            "answer": answer
-        }
-    
-    elif function_name == "customer_segmentation":
-        # Fixed cutoff_date and inactivity_days, H_days is optional (default 365)
-        cutoff_date = FIXED_CUTOFF_DATE
-        inactivity_days = FIXED_INACTIVITY_DAYS
-        H_days = parameters.get("H_days", 365)
-        
-        cov = build_covariate_table(
-            transactions=transactions_df,
-            cutoff_date=cutoff_date,
-            inactivity_days=inactivity_days,
-        ).df
-        
-        cox_result = fit_cox_baseline(
-            covariates=cov,
-            covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-            train_frac=1.0,
-            random_state=42,
-            penalizer=0.1,
-        )
-        
-        segmentation_df, cutoffs = build_segmentation_table(
-            model=cox_result['model'],
-            transactions=transactions_df,
-            covariates_df=cov,
-            cutoff_date=cutoff_date,
-        )
-        
-        columns = ["customer_id", "risk_label", "t0", "erl_days", 
-                  "life_bucket", "segment", "action_tag", "recommended_action"]
-        rows = segmentation_df[columns].to_dict(orient="records")
-        
-        segment_counts = segmentation_df['segment'].value_counts().to_dict()
-        answer = f"Segmented {len(segmentation_df)} customers into {len(segment_counts)} segments "
-        answer += f"(cutoff: {cutoff_date}, inactivity: {inactivity_days} days, H: {H_days} days). "
-        answer += f"Top segments: {', '.join(list(segment_counts.keys())[:3])}."
-        
-        return {
-            "columns": columns,
-            "rows": rows,
-            "row_count": len(rows),
-            "answer": answer
-        }
-    
-    elif function_name == "prioritize_retention_targets":
-        cutoff_date = FIXED_CUTOFF_DATE
-        inactivity_days = FIXED_INACTIVITY_DAYS
-        prediction_horizon = parameters.get("prediction_horizon", 90)
-        
-        cov = build_covariate_table(
-            transactions=transactions_df,
-            cutoff_date=cutoff_date,
-            inactivity_days=inactivity_days,
-        ).df
-        
-        cox_result = fit_cox_baseline(
-            covariates=cov,
-            covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-            train_frac=1.0,
-            random_state=42,
-            penalizer=0.1,
-        )
-        
-        rfm = build_rfm(transactions_df, cutoff_date=cutoff_date)
-        models = fit_models(rfm)
-        pred_unscaled = predict_clv(models, horizon_days=prediction_horizon, aov_fallback="global_mean")
-        pred_total_purchases = pred_unscaled["pred_purchases"].sum()
-        pred_total_revenue = pred_unscaled["clv"].sum(skipna=True)
-        target_purchases = pred_total_purchases * PURCHASE_SCALE if PURCHASE_SCALE != 1.0 else None
-        target_revenue = pred_total_revenue * REVENUE_SCALE if REVENUE_SCALE != 1.0 else None
-        clv_df = predict_clv(
-            models,
-            horizon_days=prediction_horizon,
-            scale_to_target_purchases=target_purchases,
-            scale_to_target_revenue=target_revenue,
-            aov_fallback="global_mean",
-        )
-        
-        prioritized = prioritize_retention_targets(
-            model=cox_result["model"],
-            transactions=transactions_df,
-            clv_df=clv_df,
-            prediction_horizon=prediction_horizon,
-            cutoff_date=cutoff_date,
-            inactivity_days=inactivity_days,
-        )
-        
-        columns = ["customer_id", "clv", "churn_prob", "prioritize_score"]
-        rows = prioritized[columns].to_dict(orient="records")
-        answer = f"Prioritized {len(prioritized)} active customers for retention (prediction horizon: {prediction_horizon} days). "
-        answer += f"Top prioritize_score: {prioritized['prioritize_score'].max():.2f}."
-        
-        return {
-            "columns": columns,
-            "rows": rows,
-            "row_count": len(rows),
-            "answer": answer
-        }
-    
-    else:
-        raise ValueError(f"Unknown analytics function: {function_name}")
-
 
 @app.post("/ask-langchain", response_model=AskLangChainResponse)
 def ask_langchain(req: AskLangChainRequest) -> AskLangChainResponse:
@@ -464,17 +197,7 @@ def clear_langchain_memory() -> Dict[str, str]:
 
 @app.post("/clv", response_model=CLVResponse)
 def clv(req: CLVRequest) -> CLVResponse:
-    # Pull only what we need
-    sql = """
-    SELECT customer_id, invoice_no, invoice_date, revenue
-    FROM transactions
-    WHERE customer_id IS NOT NULL
-    """
-    rows, _ = run_query_internal(sql, max_rows=2_000_000)  # internal call, not user SQL
-    df = pd.DataFrame(rows)
-
-    rfm = build_rfm(df, cutoff_date=req.cutoff_date)
-    models = fit_models(rfm)
+    models = get_clv_models(req.cutoff_date)
     
     # First get unscaled predictions to calculate target totals
     pred_unscaled = predict_clv(models, horizon_days=req.horizon_days, aov_fallback="global_mean")
@@ -488,7 +211,7 @@ def clv(req: CLVRequest) -> CLVResponse:
     
     # Get scaled predictions
     pred = predict_clv(
-        models, 
+        models,
         horizon_days=req.horizon_days,
         scale_to_target_purchases=target_purchases,
         scale_to_target_revenue=target_revenue,
@@ -520,14 +243,7 @@ def km_all(inactivity_days: int = Query(INACTIVITY_DAYS, description="Inactivity
     """
     Fit Kaplan-Meier survival model on all customers.
     """
-    sql = """
-    SELECT customer_id, invoice_no, invoice_date, revenue, stock_code, country
-    FROM transactions
-    WHERE customer_id IS NOT NULL
-    """
-    rows, _ = run_query_internal(sql, max_rows=2_000_000)
-    df = pd.DataFrame(rows)
-
+    df = get_transactions_df()
     cov = build_covariate_table(
         transactions=df,
         cutoff_date=CUTOFF_DATE,
@@ -556,52 +272,34 @@ def score_customers_endpoint(
     cutoff_date: str = Query(CUTOFF_DATE, description="Cutoff date for scoring (YYYY-MM-DD)"),
 ) -> ScoreCustomersResponse:
     """
-    Score customers using a fitted Cox model to predict churn risk.
+    Score active customers using a fitted Cox model (already-churned customers are excluded and listed).
     """
-    sql = """
-    SELECT customer_id, invoice_no, invoice_date, revenue, stock_code, country
-    FROM transactions
-    WHERE customer_id IS NOT NULL
-    """
-    rows, _ = run_query_internal(sql, max_rows=2_000_000)
-    df = pd.DataFrame(rows)
+    df = get_transactions_df()
+    cox_result = get_or_fit_cox_model(df, cutoff_date, inactivity_days)
+    train_df = cox_result["train_df"]
+    churned_ids = train_df.loc[train_df["event"] == 1, "customer_id"].astype(int).tolist()
 
-    # Build covariate table for model fitting
-    cov = build_covariate_table(
-        transactions=df,
-        cutoff_date=cutoff_date,
-        inactivity_days=inactivity_days,
-    ).df
-
-    # Fit Cox model with standard covariates
-    cox_result = fit_cox_baseline(
-        covariates=cov,
-        covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-        train_frac=1.0,
-        random_state=42,
-        penalizer=0.1,
-    )
-    cox_model = cox_result['model']
-
-    # Score customers
+    # Score active customers only (covariate_df = train_df filters to event==0)
     scored = score_customers(
-        model=cox_model,
+        model=cox_result["model"],
         transactions=df,
         cutoff_date=cutoff_date,
+        covariate_df=train_df,
     )
 
-    # Create summary
     summary = {
         "n_customers": int(len(scored)),
-        "risk_score_mean": float(scored["risk_score"].mean()),
-        "risk_score_max": float(scored["risk_score"].max()),
-        "risk_bucket_counts": scored["risk_bucket"].value_counts().to_dict(),
+        "risk_score_mean": float(scored["risk_score"].mean()) if len(scored) > 0 else 0.0,
+        "risk_score_max": float(scored["risk_score"].max()) if len(scored) > 0 else 0.0,
+        "risk_bucket_counts": scored["risk_bucket"].value_counts().to_dict() if len(scored) > 0 else {},
     }
 
     return ScoreCustomersResponse(
         cutoff_date=cutoff_date,
         inactivity_days=inactivity_days,
         n_customers=len(scored),
+        already_churned_count=len(churned_ids),
+        already_churned_customer_ids=churned_ids[:500],
         scored_customers=scored.to_dict(orient="records"),
         summary=summary,
     )
@@ -617,34 +315,12 @@ def churn_probability_endpoint(
     Predict conditional churn probability for active customers.
     Computes P(churn in next X days | survived to cutoff).
     """
-    sql = """
-    SELECT customer_id, invoice_no, invoice_date, revenue, stock_code, country
-    FROM transactions
-    WHERE customer_id IS NOT NULL
-    """
-    rows, _ = run_query_internal(sql, max_rows=2_000_000)
-    df = pd.DataFrame(rows)
-
-    # Build covariate table for model fitting
-    cov = build_covariate_table(
-        transactions=df,
-        cutoff_date=cutoff_date,
-        inactivity_days=inactivity_days,
-    ).df
-
-    # Fit Cox model with standard covariates
-    cox_result = fit_cox_baseline(
-        covariates=cov,
-        covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-        train_frac=1.0,
-        random_state=42,
-        penalizer=0.1,
-    )
-    cox_model = cox_result['model']
+    df = get_transactions_df()
+    cox_result = get_or_fit_cox_model(df, cutoff_date, inactivity_days)
 
     # Predict churn probabilities
     predictions = predict_churn_probability(
-        model=cox_model,
+        model=cox_result["model"],
         transactions=df,
         cutoff_date=cutoff_date,
         X_days=X_days,
@@ -681,13 +357,7 @@ def expected_lifetime_endpoint(
     """
     Compute expected remaining lifetime in days (Monte Carlo, BG/NBD).
     """
-    sql = """
-    SELECT customer_id, invoice_no, invoice_date, revenue, stock_code, country
-    FROM transactions
-    WHERE customer_id IS NOT NULL
-    """
-    rows, _ = run_query_internal(sql, max_rows=2_000_000)
-    df = pd.DataFrame(rows)
+    df = get_transactions_df()
     expected_lifetimes = _build_expected_lifetimes_df(df, cutoff_date, inactivity_days, H_days)
 
     # Create summary
@@ -719,34 +389,13 @@ def segmentation_endpoint(
     """
     Build segmentation table combining risk labels and expected remaining lifetime.
     """
-    sql = """
-    SELECT customer_id, invoice_no, invoice_date, revenue, stock_code, country
-    FROM transactions
-    WHERE customer_id IS NOT NULL
-    """
-    rows, _ = run_query_internal(sql, max_rows=2_000_000)
-    df = pd.DataFrame(rows)
-
-    # Build covariate table
-    cov = build_covariate_table(
-        transactions=df,
-        cutoff_date=cutoff_date,
-        inactivity_days=inactivity_days,
-    ).df
-
-    # Fit Cox model with standard covariates
-    cox_result = fit_cox_baseline(
-        covariates=cov,
-        covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-        train_frac=1.0,
-        random_state=42,
-        penalizer=0.1,
-    )
-    cox_model = cox_result['model']
+    df = get_transactions_df()
+    cox_result = get_or_fit_cox_model(df, cutoff_date, inactivity_days)
+    cov = cox_result["train_df"]
 
     # Build segmentation table
     segmentation_df, cutoffs = build_segmentation_table(
-        model=cox_model,
+        model=cox_result["model"],
         transactions=df,
         covariates_df=cov,
         cutoff_date=cutoff_date,

@@ -7,7 +7,6 @@ import uuid
 import warnings
 import sqlite3
 from typing import Dict, Any, Optional, Tuple, Union, List
-from functools import lru_cache
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
@@ -17,7 +16,7 @@ from langchain_community.callbacks import get_openai_callback
 from langgraph.checkpoint.memory import MemorySaver
 from openai import RateLimitError, APIError, APIConnectionError, APITimeoutError
 import pandas as pd
-from analytics.clv import build_rfm, fit_models, predict_clv, PURCHASE_SCALE, REVENUE_SCALE
+from analytics.clv import predict_clv, PURCHASE_SCALE, REVENUE_SCALE
 from analytics.survival import (
     build_covariate_table,
     fit_cox_baseline,
@@ -30,29 +29,13 @@ from analytics.survival import (
 )
 from analytics.monte_carlo import compute_erl_days
 from app.db import run_query, run_query_internal, get_schema, ensure_select_only
+from app.data import get_transactions_df, get_clv_models
 
 load_dotenv()
-
-# Global transactions cache
-_transactions_cache = None
 
 # Model fit cache (for expensive Cox model fits)
 _model_cache: Dict[str, Tuple[Any, float]] = {}
 CACHE_TTL = 3600  # 1 hour cache TTL
-
-
-def get_transactions_df() -> pd.DataFrame:
-    """Load transactions data - cached for performance"""
-    global _transactions_cache
-    if _transactions_cache is None:
-        sql = """
-        SELECT customer_id, invoice_no, invoice_date, revenue, stock_code, country
-        FROM transactions
-        WHERE customer_id IS NOT NULL
-        """
-        rows, _ = run_query_internal(sql, max_rows=2_000_000)
-        _transactions_cache = pd.DataFrame(rows)
-    return _transactions_cache.copy()
 
 
 def get_cached_cox_model(cache_key: str) -> Optional[Any]:
@@ -247,9 +230,7 @@ def predict_clv_tool(horizon_days: int = 90, limit_customers: int = 10, order: s
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', category=RuntimeWarning, message='invalid value encountered in log')
             
-            rfm = build_rfm(transactions_df, cutoff_date=cutoff_date)
-            models = fit_models(rfm)
-            
+            models = get_clv_models(cutoff_date)
             pred_unscaled = predict_clv(models, horizon_days=horizon_days, aov_fallback="global_mean")
             pred_total_purchases = pred_unscaled["pred_purchases"].sum()
             pred_total_revenue = pred_unscaled["clv"].sum(skipna=True)
@@ -482,8 +463,7 @@ def prioritize_retention_targets_tool(prediction_horizon: int = 90, limit_custom
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in log")
-            rfm = build_rfm(transactions_df, cutoff_date=cutoff_date)
-            models = fit_models(rfm)
+            models = get_clv_models(cutoff_date)
             pred_unscaled = predict_clv(models, horizon_days=prediction_horizon, aov_fallback="global_mean")
             pred_total_purchases = pred_unscaled["pred_purchases"].sum()
             pred_total_revenue = pred_unscaled["clv"].sum(skipna=True)
@@ -532,7 +512,9 @@ def compute_erl_days_tool(limit_customers: int = 10, order: str = "descending", 
         cutoff_date = CUTOFF_DATE
         inactivity_days = INACTIVITY_DAYS
         
-        rfm = build_rfm(transactions_df, cutoff_date)
+        clv_result = get_clv_models(cutoff_date)
+        rfm = clv_result.rfm
+        transactions_df = transactions_df.copy()
         transactions_df["invoice_date"] = pd.to_datetime(transactions_df["invoice_date"])
         cutoff_dt = pd.to_datetime(cutoff_date)
         last_purchases = (
@@ -544,7 +526,6 @@ def compute_erl_days_tool(limit_customers: int = 10, order: str = "descending", 
         last_purchases.columns = ["customer_id", "last_purchase_date"]
         last_purchases["last_purchase_date"] = last_purchases["last_purchase_date"].dt.strftime("%Y-%m-%d")
         customer_summary = rfm.reset_index().merge(last_purchases, on="customer_id", how="left")
-        clv_result = fit_models(rfm)
         erl_result = compute_erl_days(
             bgf=clv_result.bgnbd,
             customer_summary_df=customer_summary,
@@ -822,7 +803,7 @@ DATA CONTEXT (CRITICAL)
 - **Cutoff Date:** 2011-12-09 (All predictions are calculated as of this date).
 - **Churn Definition:** A customer is 'churned' if they have made NO purchases for 90 consecutive days as of the cutoff date.
 - **Future Dates:** You do NOT have future transactions. When asked "when will they churn", estimate using `compute_erl_days_tool` + the cutoff date.
-- Money values are in GBP (British Pounds).
+- Money values are in £ (British Pounds).
 
 ========================
 TOOL SELECTION HIERARCHY

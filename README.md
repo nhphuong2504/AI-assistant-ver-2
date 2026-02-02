@@ -57,11 +57,11 @@ The application includes sophisticated analytics modules for deep customer insig
 
 ### Survival Analysis & Churn Prediction
 
-- **Cox Proportional Hazards Model** - Identifies factors affecting customer churn risk
+- **Cox Proportional Hazards Model** - Identifies factors affecting customer churn risk (cached for performance)
 - **Kaplan-Meier Estimation** - Non-parametric survival curve analysis
-- **Customer Risk Scoring** - Leakage-free risk scoring and ranking system
+- **Customer Risk Scoring** - Leakage-free risk scoring for **active customers only**; already-churned customers are excluded and listed separately (`already_churned_count`, `already_churned_customer_ids`)
 - **Expected Remaining Lifetime (ERL)** - Monte Carlo simulation (BG/NBD) predicts expected days until churn; active customers only (ERL > 0)
-- **Churn Probability** - Estimates probability of churn within specified time horizons
+- **Churn Probability** - Estimates probability of churn within specified time horizons (active customers only)
 
 ### Customer Segmentation
 
@@ -86,7 +86,8 @@ assistant/
 │   ├── app/             # Main application code
 │   │   ├── main.py      # FastAPI routes and endpoints
 │   │   ├── db.py        # Database utilities
-│   │   └── llm_langchain.py  # LangChain AI agent
+│   │   ├── data.py      # Shared data cache (transactions, CLV models)
+│   │   └── llm_langchain.py  # LangChain AI agent & Cox model cache
 │   ├── analytics/       # Analytics modules (CLV, survival, Monte Carlo ERL)
 │   ├── etl/             # Data loading scripts
 │   ├── data/            # Data files (CSV, SQLite)
@@ -133,26 +134,28 @@ assistant/
 ┌─────────────────────────────────────────────────────┐
 │              FastAPI Backend                        │
 ├─────────────────────────────────────────────────────┤
-│                                                     │
 │  ┌─────────────────────────────────────────────┐  │
 │  │         API Layer (main.py)                 │  │
-│  │  /ask-langchain  /query  /schema            │  │
+│  │  /ask-langchain  /query  /schema  /clv       │  │
+│  │  /survival/score  /churn-probability  etc.  │  │
 │  └──────────────────┬──────────────────────────┘  │
 │                     │                               │
-│                     ▼                               │
-│  ┌─────────────────────────────────────────────┐  │
-│  │      LangChain Agent (llm_langchain.py)     │  │
-│  │  • Tool Selection  • Memory Management      │  │
+│  ┌──────────────────▼──────────────────────────┐  │
+│  │      Shared Caches (app/data.py)             │  │
+│  │  • get_transactions_df()  • get_clv_models() │  │
+│  └──────────────────┬──────────────────────────┘  │
+│                     │                               │
+│  ┌──────────────────▼──────────────────────────┐  │
+│  │      LangChain Agent (llm_langchain.py)      │  │
+│  │  • Tool selection  • Cox model cache        │  │
+│  │  • Memory  • Token usage logging            │  │
 │  └──┬──────────┬──────────┬──────────┬────────┘  │
-│     │          │          │          │             │
 │     ▼          ▼          ▼          ▼             │
 │  ┌──────┐  ┌────────┐  ┌────────┐  ┌──────────┐  │
 │  │ SQL  │  │  CLV   │  │ Churn  │  │Segmentation│ │
 │  │Query │  │Module  │  │Module  │  │  Module   │  │
 │  └──┬───┘  └────┬───┘  └────┬───┘  └─────┬─────┘  │
-│     │           │           │            │         │
 └─────┼───────────┼───────────┼────────────┼─────────┘
-      │           │           │            │
       ▼           ▼           ▼            ▼
 ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
 │ SQLite   │ │ Pandas   │ │ Pandas   │ │ Pandas   │
@@ -334,10 +337,13 @@ After activation, you can run Python commands directly. The setup and startup sc
 - **FastAPI** - Modern Python web framework
 - **LangChain** - AI agent framework
 - **LangGraph** - Agent orchestration
+- **LangChain Community** - Token usage callbacks (OpenAI)
 - **OpenAI** - LLM integration
 - **SQLite** - Database
 - **Pandas** - Data manipulation
 - **Uvicorn** - ASGI server
+- **lifelines** - Survival analysis (Cox, Kaplan-Meier)
+- **lifetimes** - CLV models (BG/NBD, Gamma-Gamma)
 
 ### Frontend
 - **React 18** - UI framework
@@ -352,7 +358,7 @@ After activation, you can run Python commands directly. The setup and startup sc
 
 ### Main Endpoints
 
-- `POST /ask-langchain` - Ask questions to the AI assistant
+- `POST /ask-langchain` - Ask questions to the AI assistant (LangChain agent with tools; token usage logged per request)
   ```json
   {
     "question": "What are the top customers?",
@@ -363,9 +369,19 @@ After activation, you can run Python commands directly. The setup and startup sc
 
 - `POST /query` - Execute SQL queries (read-only)
 - `GET /schema` - Get database schema
-- `POST /clear-memory` - Clear conversation memory
+- `GET /health` - Health check
+- `POST /ask-langchain/clear-memory` - Clear conversation memory
 
-See `backend/app/main.py` for the complete API documentation.
+### Analytics Endpoints
+
+- `POST /clv` - Customer Lifetime Value predictions (BG/NBD + Gamma-Gamma; cached by cutoff date)
+- `POST /survival/km` - Kaplan-Meier survival curve
+- `POST /survival/score` - Churn risk scoring (**active customers only**; returns `already_churned_count`, `already_churned_customer_ids`)
+- `POST /survival/churn-probability` - Churn probability in next X days (active customers)
+- `POST /survival/expected-lifetime` - Expected remaining lifetime in days (Monte Carlo ERL)
+- `POST /survival/segmentation` - Risk + ERL segmentation (12 segments, action tags)
+
+See `backend/app/main.py` for request/response schemas and full API documentation.
 
 ## 🛠️ Development
 
@@ -390,6 +406,14 @@ cd backend
 ```
 
 **Note:** The database file (`backend/data/retail.sqlite`) is excluded from version control via `.gitignore`. Each developer needs to generate it locally using the ETL script.
+
+### Performance & Caching
+
+The backend caches heavy computations to avoid redundant work:
+
+- **Transactions** – `app/data.py` caches the transactions DataFrame; all endpoints and the LangChain agent use `get_transactions_df()`.
+- **CLV models** – RFM + BG/NBD + Gamma-Gamma are cached by `cutoff_date` via `get_clv_models(cutoff_date)`; used by `/clv`, expected-lifetime, and LLM CLV/ERL/retention tools.
+- **Cox model** – Fitted Cox model is cached (1-hour TTL) in `llm_langchain.py` via `get_or_fit_cox_model()`; used by survival score, churn-probability, segmentation, and LLM risk/churn/segmentation tools.
 
 ### Frontend Development
 
