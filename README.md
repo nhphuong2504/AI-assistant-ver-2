@@ -1,4 +1,4 @@
-# AI analyst for customer growth & retention - Retail Data Chat Application
+# AI analyst for customer growth & retention – Retail Data Chat Application
 
 ![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![Node.js](https://img.shields.io/badge/node.js-18+-green.svg)
@@ -7,11 +7,9 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178C6.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-A full-stack monorepo application combining a FastAPI backend with a React frontend for AI-powered retail data analysis and chat interactions.
+A full-stack monorepo with a FastAPI backend and React frontend that delivers AI-powered retail analytics, conversational insights, and customer growth & retention intelligence.
 
-## 🔄 Version Changes
-
-> **📢 For the previous/legacy version, please visit:**
+## 🔄 Previous Version
 > 
 > **[🔗 Legacy Repository](https://github.com/nhphuong2504/AI-assistant)**
 
@@ -53,35 +51,27 @@ The application includes sophisticated analytics modules for deep customer insig
 - **Gamma-Gamma Model** - Estimates average order value per customer
 - **RFM Analysis** - Recency, Frequency, Monetary value segmentation
 - **CLV Prediction** - Forecast customer lifetime value over specified time horizons
-- **Calibrated Models** - Validated models with train/test calibration for accurate predictions
 
 ### Survival Analysis & Churn Prediction
 
-- **Cox Proportional Hazards Model** - Identifies factors affecting customer churn risk (cached for performance)
+- **Cox Proportional Hazards Model** - Identifies factors affecting customer churn risk
 - **Kaplan-Meier Estimation** - Non-parametric survival curve analysis
-- **Customer Risk Scoring** - Leakage-free risk scoring for **active customers only**; already-churned customers are excluded and listed separately (`already_churned_count`, `already_churned_customer_ids`)
-- **Expected Remaining Lifetime (ERL)** - Monte Carlo simulation (BG/NBD) predicts expected days until churn; active customers only (ERL > 0)
-- **Churn Probability** - Estimates probability of churn within specified time horizons (active customers only)
+- **Customer Risk Scoring** - Leakage-free risk scoring for active customers
+- **Expected Remaining Lifetime (ERL)** - Monte Carlo simulation (BG/NBD) predicts expected days until churn; 
+- **Churn Probability** - Estimates probability of churn within specified time horizons 
 
 ### Customer Segmentation
 
 - **Risk-Based Segmentation** - High/Medium/Low risk from Cox model
 - **ERL-Based Buckets** - Fixed thresholds: **At-Risk** (0–90 days), **Stable** (91–270), **Valued** (271–720), **VIP** (>720 days)
 - **12 Segments** - Combines risk (High/Medium/Low) and ERL bucket (At-Risk, Stable, Valued, VIP), e.g. `High/At-Risk`, `Medium/Valued`, `Low/VIP`
-- **Actionable Recommendations** - Segment-specific action tags and recommended strategies (e.g. Urgent_Winback, VIP_Protect, Maximize_LTV)
+- **Actionable Recommendations** - Segment-specific action tags and recommended strategies 
 
-### Advanced Analytics Capabilities
-
-- **Monte Carlo ERL** - Expected remaining lifetime in days via BG/NBD simulation (business-defined churn: inactivity window)
-- **Covariate Analysis** - Examines purchase frequency, monetary value, product diversity, and geographic factors
-- **Model Validation** - Comprehensive validation metrics including concordance index and calibration
-- **Time-to-Event Modeling** - Analyzes customer tenure, recency, and churn events
-- **Feature Engineering** - Automatic construction of predictive features from transaction data
 
 ## 📁 Project Structure
 
 ```
-assistant/
+AI-assistant-ver-2/
 ├── backend/              # FastAPI backend application
 │   ├── app/             # Main application code
 │   │   ├── main.py      # FastAPI routes and endpoints
@@ -315,8 +305,6 @@ The frontend will run on `http://localhost:8080`
 
 ## 🐍 Virtual Environment
 
-**IMPORTANT:** The Python virtual environment (`venv/`) is located at the **root level** of the project, not in the `backend/` directory.
-
 ### Manual Activation (if needed)
 
 **Windows:**
@@ -376,10 +364,10 @@ After activation, you can run Python commands directly. The setup and startup sc
 
 - `POST /clv` - Customer Lifetime Value predictions (BG/NBD + Gamma-Gamma; cached by cutoff date)
 - `POST /survival/km` - Kaplan-Meier survival curve
-- `POST /survival/score` - Churn risk scoring (**active customers only**; returns `already_churned_count`, `already_churned_customer_ids`)
-- `POST /survival/churn-probability` - Churn probability in next X days (active customers)
+- `POST /survival/score` - Churn risk scoring
+- `POST /survival/churn-probability` - Churn probability in next X days 
 - `POST /survival/expected-lifetime` - Expected remaining lifetime in days (Monte Carlo ERL)
-- `POST /survival/segmentation` - Risk + ERL segmentation (12 segments, action tags)
+- `POST /survival/segmentation` - Risk + ERL segmentation 
 
 See `backend/app/main.py` for request/response schemas and full API documentation.
 
@@ -438,13 +426,3 @@ Create `frontend/.env` with:
 ⚠️ Never commit `.env` files. Add `backend/.env` and `frontend/.env` to `.gitignore`.
 
 
-## 📚 Additional Resources
-
-- FastAPI Documentation: https://fastapi.tiangolo.com/
-- LangChain Documentation: https://python.langchain.com/
-- React Documentation: https://react.dev/
-- Vite Documentation: https://vitejs.dev/
-
----
-
-**Note:** Always ensure the root-level `venv/` is used. Do not create virtual environments in subdirectories.

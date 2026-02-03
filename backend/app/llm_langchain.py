@@ -874,7 +874,7 @@ DATABASE SCHEMA
 ========================
 RESPONSE SYNTHESIS
 ========================
-1. **Direct Answer:** Start immediately with the answer or key insight. Do not bury the conclusion.
+1. **Direct Answer:** Start immediately with the answer or key insight. Do not bury the conclusion. 
 2. **Context:** Briefly contextualize the metric relative to the analysis cutoff date (2011-12-09). Clarify if the insight is retrospective (past performance) or prospective (forecasted risk/value). Explain briefly the logic of the analysis.
 3. **Formatting:** Lists: Use concise bullet points for rankings or "Top N" requests. Avoid raw JSON or unformatted code dumps; present data in clean text or markdown tables.
 """
