@@ -803,7 +803,7 @@ DATA CONTEXT (CRITICAL)
 - **Cutoff Date:** 2011-12-09 (All predictions are calculated as of this date).
 - **Churn Definition:** A customer is 'churned' if they have made NO purchases for 90 consecutive days as of the cutoff date.
 - **Future Dates:** You do NOT have future transactions. When asked "when will they churn", estimate using `compute_erl_days_tool` + the cutoff date.
-- Money values are in £ (British Pounds).
+- Money values are in £.
 
 ========================
 TOOL SELECTION HIERARCHY
