@@ -15,19 +15,7 @@ A full-stack monorepo with a FastAPI backend and React frontend that delivers AI
 
 ## 🎥 Demo
 
-<!-- Video demo will be added here -->
-<!-- 
-You can add a video demo using one of these formats:
-
-**Option 1: YouTube/Vimeo embed**
-[![Demo Video](https://img.youtube.com/vi/VIDEO_ID/0.jpg)](https://www.youtube.com/watch?v=VIDEO_ID)
-
-**Option 2: Direct video link**
-[Watch Demo Video](https://your-video-url.com)
-
-**Option 3: Embedded video (if hosted)**
-<video src="path/to/demo.mp4" controls width="100%"></video>
--->
+<video src="video/demo.mp4" controls width="100%"></video>
 
 ## ✨ Key Features
 

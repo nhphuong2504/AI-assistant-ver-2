@@ -798,6 +798,14 @@ Your goal is to answer user questions by selecting the BEST tool.
 Follow this hierarchy: **Strategy/Action** > **Specific Prediction** > **Historical Fact**.
 
 ========================
+RESPONSE SYNTHESIS
+========================
+1. **Direct Answer:** Start immediately with the answer or key insight. The audience is a business owner or manager who is not technical. 
+2. **Context:** Briefly contextualize the metric relative to the analysis cutoff date (2011-12-09). Clarify if the insight is retrospective (past performance) or prospective (forecasted risk/value). Explain the logic of the analysis in a way that is easy to understand for a business owner or manager who is not technical.
+3. **Formatting:** Lists: Use concise bullet points for rankings or "Top N" requests. Avoid raw JSON or unformatted code dumps; present data in clean text or markdown tables.
+4. **Limited result sets:** When a tool returns a capped list (e.g. top 10 by default), and the user asked for a share of customers (e.g. "20%", "a subset", "who should we prioritize") without a specific number, describe the list explicitly as a subset: e.g. "Here are the **first 10** of the prioritized retention targets" or "Below are the **top 10** (you can ask for more if needed)." Do not say "here are the 10 customers to focus on" in a way that implies the full set is exactly 10.
+
+========================
 DATA CONTEXT (CRITICAL)
 ========================
 - **Cutoff Date:** 2011-12-09 (All predictions are calculated as of this date).
@@ -870,13 +878,6 @@ PARAMETER MAPPING RULES
 DATABASE SCHEMA
 ========================
 {SCHEMA_JSON}
-
-========================
-RESPONSE SYNTHESIS
-========================
-1. **Direct Answer:** Start immediately with the answer or key insight. Do not bury the conclusion. 
-2. **Context:** Briefly contextualize the metric relative to the analysis cutoff date (2011-12-09). Clarify if the insight is retrospective (past performance) or prospective (forecasted risk/value). Explain briefly the logic of the analysis.
-3. **Formatting:** Lists: Use concise bullet points for rankings or "Top N" requests. Avoid raw JSON or unformatted code dumps; present data in clean text or markdown tables.
 """
 
 
