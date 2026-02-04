@@ -15,7 +15,7 @@ A full-stack monorepo with a FastAPI backend and React frontend that delivers AI
 
 ## 🎥 Demo
 
-https://github.com/nhphuong2504/AI-assistant-ver-2/blob/main/video/demo.mp4
+https://raw.githubusercontent.com/nhphuong2504/AI-assistant-ver-2/main/video/demo.mp4
 
 ## ✨ Key Features
 
