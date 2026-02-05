@@ -15,7 +15,7 @@ A full-stack monorepo with a FastAPI backend and React frontend that delivers AI
 
 ## 🎥 Demo
 
-[![Demo Video](video/thumbnail.png)](https://youtu.be/0CBPu7cR1ss)
+[![Demo Video](video/thumbnail.png)](https://youtu.be/t083cHw5GV4)
 
 
 ## ✨ Key Features
