@@ -9,14 +9,16 @@
 
 A full-stack monorepo with a FastAPI backend and React frontend that delivers AI-powered retail analytics, conversational insights, and customer growth & retention intelligence.
 
-## 🔄 Previous Version
-> 
-> **[🔗 Legacy Repository](https://github.com/nhphuong2504/AI-assistant)**
 
 ## 🎥 Demo
 
-[![Demo Video](video/thumbnail.png)](https://youtu.be/t083cHw5GV4)
+<a href="https://youtu.be/t083cHw5GV4" target="_blank" rel="noopener noreferrer">
+  <img src="video/thumbnail.png" alt="Demo Video" />
+</a>
 
+## 🔄 Previous Version
+> 
+> **[🔗 Legacy Repository](https://github.com/nhphuong2504/AI-assistant)**
 
 ## ✨ Key Features
 
