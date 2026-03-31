@@ -220,7 +220,7 @@ def filter_by_customer_ids(df: pd.DataFrame, customer_id: Optional[Union[int, st
 
 @tool
 def predict_clv_tool(horizon_days: int = 90, limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Predict Customer Lifetime Value (CLV) using BG/NBD and Gamma-Gamma models. Use this for questions about: customer lifetime value, CLV, future customer value, predicted revenue per customer, customer worth, or which customers are most valuable. Calibration cutoff date is fixed at 2011-12-09. Parameters: horizon_days (default: 90), limit_customers (default: 10), order (default: "descending"; use "ascending" for lowest/least valuable CLV), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by CLV: descending = highest CLV first; ascending = lowest CLV first."""
+    """Predict forward-looking Customer Lifetime Value (CLV) using BG/NBD and Gamma-Gamma models. Use for future value, predicted revenue, and most valuable customers. Returns top N by CLV and supports customer_id/customer_ids filtering. Do NOT use for historical sales totals."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
@@ -295,7 +295,7 @@ def predict_clv_tool(horizon_days: int = 90, limit_customers: int = 10, order: s
 
 @tool
 def score_churn_risk_tool(limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Rank and score ACTIVE customers by relative churn risk (risk_score, risk_rank, risk_bucket: High/Medium/Low). Already churned customers (no purchases for 90+ days as of cutoff) are skipped and labeled as 'already_churned' in the response; risk is computed for active customers only. Returns RISK SCORES for ranking/prioritization, NOT probabilities. Use for: ranking by risk, high-risk customers, risk-based prioritization. Returns risk_score, risk_rank, risk_percentile, risk_bucket, plus already_churned_count and already_churned_customer_ids. Parameters: limit_customers (default: 10), order (default: "descending"; use "ascending" for lowest risk), customer_id (optional), customer_ids (optional). Do NOT use for probability questions."""
+    """Rank ACTIVE customers by relative churn risk using risk_score, risk_rank, and risk_bucket. Returns ranking-oriented risk scores (not probabilities) and flags already-churned customers separately. Use for high-risk lists and risk-based prioritization. Supports customer_id/customer_ids filtering."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
@@ -388,7 +388,7 @@ def score_churn_risk_tool(limit_customers: int = 10, order: str = "descending", 
 
 @tool
 def predict_churn_probability_tool(X_days: int = 90, limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Predict the PROBABILITY (0-1) that active customers will churn in the next X days. Returns actual churn probabilities, not risk scores. Use this for: 'what is the probability customer X will churn in 90 days?', 'likelihood of churn', 'churn probability', or 'probability of leaving in X days'. Returns churn_probability (0.0 to 1.0), survival_at_t0, and survival_at_t0_plus_X. Parameters: X_days (default: 90), limit_customers (default: 10), order (default: "descending"; use "ascending" for lowest/least likely to churn), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by churn probability: descending = highest first; ascending = lowest first. Do NOT use for risk ranking or lifetime questions."""
+    """Predict churn probability (0-1) for ACTIVE customers over the next X_days. Use for likelihood/chance questions and probability-based churn analysis. Returns churn_probability with survival context and supports customer_id/customer_ids filtering. Do NOT use for risk-score ranking or lifetime-duration questions."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
@@ -453,7 +453,7 @@ def predict_churn_probability_tool(X_days: int = 90, limit_customers: int = 10, 
 
 @tool
 def prioritize_retention_targets_tool(prediction_horizon: int = 90, limit_customers: int = 10, order: str = "descending") -> str:
-    """Prioritize active customers for retention by combining CLV and churn probability. Returns customer_id, clv, churn_prob, and prioritize_score (clv * churn_prob). Use for: 'who should we target for retention?', 'prioritize retention', 'high-value at-risk customers', 'retention targets', or 'which customers to save first'. Parameters: prediction_horizon (default: 90 days), limit_customers (default: 10), order (default: 'descending' = highest priority first; use 'ascending' for lowest). Sorted by prioritize_score: higher = more valuable and more likely to churn = higher retention priority."""
+    """Prioritize ACTIVE customers for retention by combining CLV and churn probability into prioritize_score (clv * churn_prob). Use for action-oriented questions like who to contact/save first. Returns highest-impact retention targets ranked by business value at risk."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
@@ -506,7 +506,7 @@ def prioritize_retention_targets_tool(prediction_horizon: int = 90, limit_custom
 
 @tool
 def compute_erl_days_tool(limit_customers: int = 10, order: str = "descending", customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Compute EXPECTED REMAINING LIFETIME in days for active customers (how long they will stay). Returns expected_remaining_life_days (number of days), NOT probabilities or risk scores. Use this for: 'how long will customer X stay?', 'expected remaining lifetime', 'customer lifetime expectancy', 'how many days until churn', or 'remaining customer duration'. Returns expected_remaining_life_days (numeric days), t0 (current tenure), and is_already_churned (boolean flag). Note: Customers with 0 days expected remaining lifetime are already churned (no purchases for 90+ days as of cutoff date). Parameters: limit_customers (default: 10), order (default: "descending"; use "ascending" for shortest/least remaining lifetime), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns predictions only for those customers. If not provided, returns top N by expected remaining life: descending = longest first; ascending = shortest first. Do NOT use for probability or risk ranking questions."""
+    """Compute expected remaining lifetime (ERL) in days for customers. Use for 'how long will they stay' or 'days until churn' questions. Returns expected_remaining_life_days and tenure context, and supports customer_id/customer_ids filtering. Use order='ascending' for soonest expected churn. Do NOT use for probability or risk-score requests."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
@@ -609,7 +609,7 @@ def compute_erl_days_tool(limit_customers: int = 10, order: str = "descending", 
 
 @tool
 def customer_segmentation_tool(H_days: int = 365, customer_id: Optional[Union[int, str]] = None, customer_ids: Optional[List[Union[int, str]]] = None) -> str:
-    """Build comprehensive customer segmentation combining RISK LABELS (High/Medium/Low from churn risk) and ERL buckets (At-Risk 0-90 days, Stable 91-270, Valued 271-720, VIP >720). Returns 12 segments (e.g., 'High/At-Risk', 'Medium/Valued', 'Low/VIP') with action tags and recommended actions. Use this for: customer segmentation, segment analysis, action recommendations, customer groups by risk and lifetime, strategic customer management, which actions to take for different customer types; and for questions about a SPECIFIC customer or GROUP of customers—e.g. which segment is customer X in?, what is their risk label and ERL bucket?, what action should I take for customer 12346?, segment and recommended action for these customers. Parameters: H_days (default: 365), customer_id (optional, single customer ID), customer_ids (optional, list of customer IDs). If customer_id or customer_ids provided, returns segmentation only for those customers. If not provided, returns all customers with samples per segment (default behavior). This is a COMPREHENSIVE segmentation that combines both risk and lifetime - do NOT use for individual risk scores, probabilities, or lifetime values alone."""
+    """Build comprehensive customer segmentation by combining churn risk labels and ERL lifetime buckets into 12 actionable segments. Use for strategy/action guidance, segment analysis, and customer-level segment assignment with recommended actions. Supports customer_id/customer_ids filtering. Do NOT use for standalone probability, risk-score, or single-metric lifetime requests."""
     try:
         transactions_df = get_transactions_df()
         cutoff_date = CUTOFF_DATE
@@ -681,7 +681,7 @@ def customer_segmentation_tool(H_days: int = 365, customer_id: Optional[Union[in
 
 @tool
 def get_customer_counts_tool() -> str:
-    """Return total number of customers, number of churned customers, and number of active (not churned) customers as of the cutoff date. Use this for: 'how many customers do we have?', 'how many churned?', 'how many active?', 'how many have not churned?', 'total/churned/active customer counts'. Churn is defined as no purchases for 90+ days as of cutoff 2011-12-09. Returns total_customers, churned_customers, active_customers (total = churned + active). No parameters."""
+    """Return total customers, churned customers, and active (not churned) customers as of the cutoff date. Use this for total/churned/active customer counts. Churn means no purchases for 90+ days as of 2011-12-09. Returns total_customers, churned_customers, and active_customers."""
     try:
         transactions_df = get_transactions_df()
         cov_result = build_covariate_table(
@@ -715,7 +715,7 @@ def get_customer_counts_tool() -> str:
 
 @tool
 def execute_sql_query_tool(sql: str, explanation: str = "") -> str:
-    """Execute a SQL SELECT query for historical data, aggregations, and counting. ALWAYS use this tool for: 'how many customers do we have?', 'how many orders?', 'count of X', 'number of customers/orders/invoices', revenue by country, top customers, sales trends, product analysis, or any aggregation/filtering. Other tools (CLV, risk, segmentation, etc.) return 'total_customers' as the size of the result set (e.g. top 10), NOT the total in the database—for total counts use this tool with a COUNT query. Parameters: sql (required, SQL SELECT query), explanation (optional)."""
+    """Execute SQL SELECT queries for historical reporting, aggregations, and descriptive analytics (orders, invoices, revenue, products, trends). Parameters: sql (required) and explanation (optional). Do NOT use for prediction tasks, and do NOT use for total/churned/active customer counts; use get_customer_counts_tool for those cohort counts."""
     try:
         validate_sql(sql)
         rows, cols = run_query(sql, limit=1000)
@@ -804,6 +804,7 @@ RESPONSE SYNTHESIS
 2. **Context:** Briefly contextualize the metric relative to the analysis cutoff date (2011-12-09). Clarify if the insight is retrospective (past performance) or prospective (forecasted risk/value). Explain the logic of the analysis in a way that is easy to understand for a business owner or manager who is not technical.
 3. **Formatting:** Lists: Use concise bullet points for rankings or "Top N" requests. Avoid raw JSON or unformatted code dumps; present data in clean text or markdown tables.
 4. **Limited result sets:** When a tool returns a capped list (e.g. top 10 by default), and the user asked for a share of customers (e.g. "20%", "a subset", "who should we prioritize") without a specific number, describe the list explicitly as a subset: e.g. "Here are the **first 10** of the prioritized retention targets" or "Below are the **top 10** (you can ask for more if needed)." Do not say "here are the 10 customers to focus on" in a way that implies the full set is exactly 10.
+5. **Uncertainty framing:** For predictions (CLV, churn probability, ERL), describe outputs as model estimates with uncertainty. Prefer phrasing like "the model estimates X% probability" instead of deterministic claims.
 
 ========================
 DATA CONTEXT (CRITICAL)
@@ -858,13 +859,30 @@ TOOL SELECTION HIERARCHY
 ========================
 AMBIGUITY RESOLUTION
 ========================
-- "Best customers" → Prefer **CLV** unless user explicitly says "historical" or "past sales".
-- "At risk customers" →
-  - If asking for ACTION ("who to save") → **prioritize_retention_targets_tool**
-  - If asking for LIST/RANKING ("who is risky") → **score_churn_risk_tool**
-- "Most likely to churn" →
-  - If Time-based ("soonest") → **compute_erl_days_tool** (order="ascending")
-  - If Probability-based ("likelihood") → **predict_churn_probability_tool**
+- User: "Who are our best customers?"
+  - Tool: **predict_clv_tool** (forward-looking value, not historical sales).
+- User: "Which customers should we save first?"
+  - Tool: **prioritize_retention_targets_tool** (value + churn likelihood for action).
+- User: "Who will churn soonest?"
+  - Tool: **compute_erl_days_tool** with `order="ascending"` (time-to-churn view).
+- User: "What's the chance customer 16444 leaves?"
+  - Tool: **predict_churn_probability_tool** (probability estimate 0-1).
+
+========================
+MULTI-STEP REASONING
+========================
+For complex requests (budgets, percentages, or multi-constraint decisions):
+1. Break the request into sub-goals.
+2. Identify the right tool(s) and parameter mapping for each sub-goal.
+3. Execute tools in the needed sequence.
+4. Synthesize one coherent final answer tied to the user's business objective.
+
+========================
+ERROR HANDLING
+========================
+- If a tool returns `status: error`, explain the failure in plain language and suggest a concrete retry (e.g., refine dates, provide a valid customer ID, or ask for a narrower query).
+- If customers are not found, explicitly list the missing IDs and ask the user to verify them.
+- If the request is outside available data or tool capabilities, state the limitation clearly and avoid hallucinated values.
 
 ========================
 PARAMETER MAPPING RULES
@@ -875,8 +893,17 @@ PARAMETER MAPPING RULES
 - "Safest" / "Least Likely" / "Soonest Churn" → `order="ascending"`
 
 ========================
+COMMON PARAMETERS
+========================
+- `limit_customers`: Default is 10 when not provided.
+- `order`: Use `descending` by default; use `ascending` for lowest/soonest/safest style requests.
+- `customer_id`: Single-customer lookup.
+- `customer_ids`: Multi-customer lookup.
+
+========================
 DATABASE SCHEMA
 ========================
+Use this schema ONLY when constructing SQL for `execute_sql_query_tool`. Follow these exact table and column names.
 {SCHEMA_JSON}
 """
 
