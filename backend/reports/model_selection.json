@@ -1,0 +1,33 @@
+{
+  "churn_model": "logistic_full",
+  "spend_model": "bgnbd_gamma_gamma",
+  "development_mean_brier": {
+    "recency_logistic": 0.2111622533069012,
+    "logistic_base": 0.19709500993236373,
+    "logistic_windows": 0.19355943909095177,
+    "logistic_full": 0.185073772829252,
+    "boosting_base": 0.18977727275287096,
+    "boosting_full": 0.1857594144478036,
+    "landmark_cox": 0.18787287866827332
+  },
+  "development_mean_spend_mae": {
+    "last90": 471.0963878393521,
+    "bgnbd_gamma_gamma": 451.2449707071599,
+    "two_part_glm": 517.0843675202533,
+    "two_part_boosting": 528.2482423967377
+  },
+  "policy": "churn_x_historical_spend",
+  "development_mean_weighted_recall_at20": {
+    "recency": 0.31146363451831643,
+    "historical_spend": 0.40258955791365164,
+    "churn": 0.28053720551606626,
+    "clv": 0.2246627629028848,
+    "churn_x_clv": 0.2696433865697475,
+    "churn_x_historical_spend": 0.5277717635995892
+  },
+  "protocol_sha256": "a6ed70a05849c146ff6cb1f1e0f7c378eb2a7849020f4194f0aa8323e611aee3",
+  "source_sha256": "f0d4e4f72b6bc62ce831e8243bc02e491fda0085c1d94f3075063411539b1f04",
+  "horizon_days": 90,
+  "inactivity_days": 90,
+  "selected_using": "Development windows only; no final-window scores used in selection"
+}

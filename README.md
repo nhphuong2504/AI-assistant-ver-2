@@ -1,14 +1,91 @@
-# AI analyst for customer growth & retention – Retail Data Chat Application
+# Customer Retention Decision Support
 
-![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Node.js](https://img.shields.io/badge/node.js-18+-green.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-009688.svg)
 ![React](https://img.shields.io/badge/React-18-61DAFB.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178C6.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-A full-stack monorepo with a FastAPI backend and React frontend that delivers AI-powered retail analytics, conversational insights, and customer growth & retention intelligence.
+Cutoff-safe customer modeling and budget-constrained targeting on UCI Online Retail, served through FastAPI and a conversational interface. The pipeline audits 541,909 raw transaction records and models 392,692 cleaned records across 4,338 customers.
 
+## The business decision
+
+Which active customers should a retailer contact when the budget covers only 5%, 10% or 20% of its customers?
+
+The selected policy combines predicted 90-day inactivity probability with each customer's **historical 90-day gross sales**. Models and policy were selected on three earlier development windows, then audited on a previously viewed final period. This is a retrospective benchmark, not a pristine unseen experiment.
+
+| Measured result | Development-selected approach | Comparator |
+|---|---:|---:|
+| Historical-sales-weighted inactivity recall at a 20% contact budget | **54.1%** | 34.8% spending-only; 42.5% recency-probability × sales (post-hoc) |
+| 90-day inactivity Brier score, lower is better | **0.169** | 0.202 recency-only; 0.172 Cox |
+
+Targeting uses 380 of 1,899 active customers. Its advantage over spending-only is **+19.3 percentage points** (conditional paired-bootstrap 95% CI: **+12.7 to +23.6 pp**). The objective weights realized inactivity events by **pre-cutoff sales**; it does not measure money saved, incremental revenue, treatment uplift or profit. Churn-only ranking finds more inactivity events, while the selected policy prioritizes higher historical value.
+
+![Budgeted customer targeting and its event-count tradeoff](backend/reports/figures/targeting.png)
+
+## Modeling decisions
+
+- Engineered **18 cutoff-safe features** covering recency, spending/purchase windows, behavioral trends, purchase cadence and prior inactivity/reactivation.
+- Compared recency-only logistic, three logistic feature sets, two shallow boosting specifications and historical-landmark Cox. **Regularized logistic regression** won mean development Brier; its final AUC was 0.832, with **16.1% lower Brier** than recency-only logistic. Its small Brier improvement over Cox is not statistically established.
+- Compared BG/NBD–Gamma-Gamma, recent-spend and two supervised two-part spending models. **Retained BG/NBD–Gamma-Gamma** because the challengers worsened the primary MAE. Its total-sales underprediction remains **40.5%**, and its RMSE is worse than recent spending; ranking quality does not imply accurate aggregate forecasting.
+- CLV top-20% sales capture was 69.4% versus 65.8% for recent spending, a modest 3.6-percentage-point gain without a bootstrap interval for that ranking difference. It is supporting analysis, rather than a headline achievement.
+- Evaluated seven prespecified contact policies at **5%, 10%, 20%** budgets. A stronger recency-probability × sales policy was subsequently checked and is explicitly labeled post-hoc.
+- Used one feature implementation for evaluation and serving. API predictions are checked against saved offline predictions, and future-row mutations are tested for invariance.
+
+![Development model choice and final calibration diagnostic](backend/reports/figures/model_selection.png)
+
+## Validation timeline
+
+```mermaid
+flowchart LR
+    D["Development cutoffs: Apr 9 / May 9 / Jun 9"] --> E["Outcomes complete by Sep 7: freeze model and policy choices"]
+    A["Jun 11: freeze historical training features"] --> B["Training outcomes observed through Sep 9"]
+    E --> C["Fit selected model family"]
+    B --> C
+    C --> F["Sep 9: score active customers using cutoff-only features"]
+    F --> G["Sep 10–Dec 8: evaluate 90-day outcomes"]
+```
+
+Monthly development follow-ups overlap and customers recur. Bootstrap intervals are conditional on fitted models and this period, not model-selection or seasonal uncertainty. No holdout outcomes scale forecasts. CLV evaluation includes all existing customers, including non-buyers; targeting includes only active customers.
+
+## Reproduce and inspect
+
+Read the [current technical decisions and resume evidence](backend/reports/DECISION_REVIEW.md). Source results: [decision_evaluation.json](backend/reports/decision_evaluation.json), [frozen development selection](backend/reports/model_selection.json), and customer-level prediction CSVs in `backend/reports/`. The [initial review](backend/reports/REVIEW.md) and [initial Cox/CLV benchmark](backend/reports/evaluation.json) are retained for comparison.
+
+From the repository root:
+
+```powershell
+.\venv\Scripts\python.exe backend/etl/load_online_retail.py
+.\venv\Scripts\python.exe backend/evaluate.py
+.\venv\Scripts\python.exe backend/evaluate_decisions.py
+.\venv\Scripts\python.exe backend/render_decision_report.py
+.\venv\Scripts\python.exe -m unittest discover -s backend/tests -v
+```
+
+Evaluation runs locally without paid LLM calls. API integration tests initialize agent configuration with a dummy key and never invoke the LLM. Python 3.13.9 was used for measured results; install tested constraints with `pip install -r backend/requirements.txt -c backend/requirements-tested.txt`.
+
+The selected policy is exposed through:
+
+```http
+POST /retention/targets
+Content-Type: application/json
+
+{"cutoff_date":"2011-09-09","contact_fraction":0.2}
+```
+
+The response contains budget counts, ranked customer IDs, scores, probabilities and interpretation limits. The chat retention tool uses the same policy and distinguishes total contacts from a capped display list. Historical API endpoints retain their explicitly named Cox/CLV methods.
+
+Scientific boundaries:
+
+- Monetary values are GBP **gross positive sales**, excluding cancellations/returns; profit and net-revenue CLV are not estimated.
+- Daily CLV summaries use repeat purchase-days and repeat-day monetary value excluding the first day. Date cutoffs include all available transactions on the named day.
+- Exact source duplicates are excluded from analytics and retained in the audit table; legitimate identical lines cannot be distinguished without source event IDs.
+- Inactivity is reversible. Kaplan-Meier describes the first observed inactivity episode; Monte Carlo ERL is a restricted simulated mean, not validated permanent lifetime. Segment actions are untested hypotheses.
+- Current regression tests are in `backend/tests/`. `backend/test/` contains historical exploratory/calibration scripts and old agent answers; its outcome-scaled calibration is not current validation.
+- The old agent score of 37/40 came from a permissive string-matching grader and is not a current accuracy claim. Existing memory/session and production-operation limitations are documented in the initial review.
+
+The earlier application descriptions below document the interface; measured results and limitations above govern scientific claims.
 
 ## 🎥 Demo
 
@@ -203,7 +280,7 @@ The raw CSV data is located at `backend/data/raw/online_retail.csv` and is proce
 
 ### Prerequisites
 
-- **Python 3.8+** installed
+- **Python 3.10+** installed
 - **Node.js 18+** and npm installed
 - **OpenAI API Key** (for AI features)
 

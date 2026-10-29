@@ -7,15 +7,15 @@ This module implements the classic CLV framework:
 """
 import pandas as pd
 import numpy as np
+from scipy.integrate import quad
+from scipy.special import hyp2f1
 from dataclasses import dataclass
 from lifetimes import BetaGeoFitter, GammaGammaFitter
+from .time_utils import cutoff_timestamp
 
-# Hard-coded calibration scales from train/test validation
-# These values are derived from calibration on train cutoff 2011-09-09, test cutoff 2011-12-09
-# Update these values after running test/test-clv.py calibration flow
-# To update: Run the test, copy the scale values from the output, and paste them here
-PURCHASE_SCALE = 1.1  # Update with actual calibrated value from test output
-REVENUE_SCALE = 1.7  # Update with actual calibrated value from test output
+# Neutral defaults: no calibration on holdout outcomes. Retained for API compatibility.
+PURCHASE_SCALE = 1.0
+REVENUE_SCALE = 1.0
 
 
 @dataclass
@@ -40,10 +40,10 @@ def build_rfm(
     """Build RFM (Recency, Frequency, Monetary) table from transaction data.
     
     RFM fields:
-    - frequency: Number of repeat purchases (n_orders - 1)
+    - frequency: Number of repeat purchase-days (n_purchase_days - 1)
     - recency: Days between first and last purchase
     - T: Days between first purchase and cutoff date
-    - monetary_value: Average order value (NaN for one-time buyers)
+    - monetary_value: Mean repeat purchase-day spend, excluding first day (NaN for one-time buyers)
     
     Args:
         transactions: Transaction data with columns: customer_id, invoice_no, 
@@ -57,7 +57,9 @@ def build_rfm(
     """
     df = transactions.copy()
     df["invoice_date"] = pd.to_datetime(df["invoice_date"])
-    cutoff = pd.to_datetime(cutoff_date)
+    if not 0 < cap_percentile <= 100:
+        raise ValueError("cap_percentile must be in (0, 100]")
+    cutoff = cutoff_timestamp(cutoff_date)
     
     # ========================================================================
     # Data cleaning: filter to valid transactions before cutoff
@@ -76,6 +78,12 @@ def build_rfm(
             order_value=("revenue", "sum"),
         )
     )
+    # A daily model counts purchase occasions, not multiple invoices on one day.
+    # Match lifetimes' daily summary convention and aggregate daily spend.
+    orders["order_date"] = orders["order_date"].dt.normalize()
+    orders = orders.groupby(["customer_id", "order_date"], as_index=False).agg(
+        order_value=("order_value", "sum")
+    )
     
     # Cap extreme order values to stabilize Gamma-Gamma model
     if len(orders) > 0 and cap_percentile < 100:
@@ -89,13 +97,13 @@ def build_rfm(
     
     first_purchase = customer_groups["order_date"].min()
     last_purchase = customer_groups["order_date"].max()
-    n_orders = customer_groups["invoice_no"].nunique()
+    n_orders = customer_groups.size()
     
     # ========================================================================
     # Calculate RFM metrics (lifetimes-style, in days)
     # ========================================================================
     # T: time from first purchase to cutoff (customer "age")
-    T = (cutoff - first_purchase).dt.days.astype(float)
+    T = (cutoff.normalize() - first_purchase).dt.days.astype(float)
     
     # recency: time from first to last purchase
     recency = (last_purchase - first_purchase).dt.days.astype(float)
@@ -104,7 +112,8 @@ def build_rfm(
     frequency = (n_orders - 1).astype(float)
     
     # monetary_value: average order value (only for repeat buyers)
-    monetary_value = customer_groups["order_value"].mean()
+    repeat_orders = orders[orders["order_date"] > orders["customer_id"].map(first_purchase)]
+    monetary_value = repeat_orders.groupby("customer_id")["order_value"].mean().reindex(n_orders.index)
     monetary_value = monetary_value.where(n_orders >= 2, np.nan)
     
     # ========================================================================
@@ -125,14 +134,14 @@ def build_rfm(
 
 def fit_models(
     rfm: pd.DataFrame,
-    penalizer: float = 0.01,
+    penalizer: float = 0.0,
     bgnbd_penalizer: float = None
 ) -> CLVResult:
     """Fit BG/NBD and Gamma-Gamma models on RFM data.
     
     Args:
         rfm: RFM DataFrame from build_rfm()
-        penalizer: Penalizer for Gamma-Gamma model (default: 0.01)
+        penalizer: Penalizer for Gamma-Gamma model (default: 0; require q > 1)
         bgnbd_penalizer: Penalizer for BG/NBD model (default: 0.05)
                         If None, uses 0.05 to handle extreme parameter values
     
@@ -145,6 +154,8 @@ def fit_models(
     # Default BG/NBD penalizer (higher to handle extreme parameter values)
     if bgnbd_penalizer is None:
         bgnbd_penalizer = 0.05
+    if rfm.empty:
+        raise ValueError("Cannot fit CLV models on empty RFM data")
     
     # Fit BG/NBD model (all customers)
     bgnbd = BetaGeoFitter(penalizer_coef=bgnbd_penalizer)
@@ -152,10 +163,14 @@ def fit_models(
     
     # Filter to repeat buyers for Gamma-Gamma fitting
     rfm_gg = rfm[(rfm["frequency"] > 0) & (rfm["monetary_value"] > 0)].copy()
+    if rfm_gg.empty:
+        raise ValueError("Gamma-Gamma requires positive-spend repeat buyers")
     
     # Fit Gamma-Gamma model (repeat buyers only)
     gg = GammaGammaFitter(penalizer_coef=penalizer)
-    gg.fit(rfm_gg["frequency"], rfm_gg["monetary_value"])
+    gg.fit(rfm_gg["frequency"], rfm_gg["monetary_value"], q_constraint=True)
+    if gg.params_["q"] <= 1 + 1e-8:
+        raise ValueError("Gamma-Gamma requires q > 1 for a finite population mean; reduce monetary-model penalization")
     
     return CLVResult(rfm=rfm, bgnbd=bgnbd, gg=gg)
 
@@ -183,8 +198,8 @@ def predict_clv(
         clv: Fitted CLV models from fit_models()
         horizon_days: Prediction horizon in days (default: 180)
         discount_rate: Discount rate for future cash flows (default: 0.0 = no discounting)
-        scale_to_target_purchases: Scale all predicted purchases to this total (optional)
-        scale_to_target_revenue: Scale all predicted revenue to this total (optional)
+        scale_to_target_purchases: Optional scenario total; NEVER supply evaluation outcomes
+        scale_to_target_revenue: Optional scenario total; NEVER supply evaluation outcomes
         aov_fallback: Strategy for non-GG-eligible customers:
                      - "none": pred_aov = NaN (default)
                      - "global_mean": Use mean AOV of repeat buyers
@@ -193,14 +208,31 @@ def predict_clv(
     Returns:
         DataFrame with predictions for all customers
     """
+    if horizon_days <= 0 or discount_rate < 0:
+        raise ValueError("horizon_days must be positive and discount_rate nonnegative")
+    if aov_fallback not in {"none", "global_mean", "zero"}:
+        raise ValueError("Unknown aov_fallback")
     rfm = clv.rfm.copy()
     
     # ========================================================================
     # Step 1: Predict expected purchases (BG/NBD - all customers)
     # ========================================================================
-    rfm["pred_purchases"] = clv.bgnbd.conditional_expected_number_of_purchases_up_to_time(
-        horizon_days, rfm["frequency"], rfm["recency"], rfm["T"]
-    )
+    with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+        rfm["pred_purchases"] = clv.bgnbd.conditional_expected_number_of_purchases_up_to_time(
+            horizon_days, rfm["frequency"], rfm["recency"], rfm["T"]
+        )
+    bad = ~np.isfinite(rfm.pred_purchases) | (rfm.pred_purchases < 0)
+    # Equivalent expected-intensity integral avoids cancellation in lifetimes'
+    # closed form near a=0 or a=1. This does not impute/drop difficult customers.
+    r, alpha, a, b = [float(clv.bgnbd.params_[k]) for k in ["r", "alpha", "a", "b"]]
+    for cid, row in rfm.loc[bad].iterrows():
+        shape, rate = r + row.frequency, alpha + row["T"]
+        alive = float(np.asarray(clv.bgnbd.conditional_probability_alive(row.frequency, row.recency, row["T"])).item())
+        integral, _ = quad(lambda u: shape / rate * hyp2f1(
+            shape + 1, a, a + b + row.frequency, -u / rate), 0, horizon_days)
+        rfm.loc[cid, "pred_purchases"] = alive * integral
+    if not np.isfinite(rfm.pred_purchases).all() or (rfm.pred_purchases < 0).any():
+        raise ValueError("BG/NBD produced invalid expected purchase counts")
     
     # ========================================================================
     # Step 2: Predict expected AOV (Gamma-Gamma - repeat buyers only)

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "horizon_days": 90,
+  "inactivity_days": 90,
+  "seed": 42,
+  "development_cutoffs": ["2011-04-09", "2011-05-09", "2011-06-09"],
+  "retrospective_test_cutoff": "2011-09-09",
+  "churn_selection_metric": "unweighted mean development Brier score; lower is better",
+  "spend_selection_metric": "unweighted mean development customer gross-sales MAE; lower is better",
+  "policy_selection_metric": "unweighted mean development historical-value-weighted inactivity recall at 20% budget; higher is better",
+  "features": "base snapshot; 30/60/90-day purchase-days and gross spend; previous-30-day trend; interpurchase cadence; prior inactivity/reactivation",
+  "churn_candidates": ["recency_logistic", "logistic_base", "logistic_windows", "logistic_full", "boosting_base", "boosting_full", "landmark_cox"],
+  "spend_candidates": ["last90", "bgnbd_gamma_gamma", "two_part_glm", "two_part_boosting"],
+  "policies": ["random_expected", "recency", "historical_spend", "churn", "clv", "churn_x_clv", "churn_x_historical_spend"],
+  "model_settings": {"logistic_C": 1.0, "gamma_alpha": 1.0, "boosting_max_iter": 100, "boosting_max_leaf_nodes": 7, "boosting_min_samples_leaf": 40, "boosting_learning_rate": 0.05, "boosting_l2": 1.0, "early_stopping": false},
+  "budget_fractions": [0.05, 0.10, 0.20],
+  "bootstrap_repeats": 1000,
+  "limitations": "Retrospective extension after earlier results were examined. Final period is not unseen. Monthly development follow-ups overlap; folds are not independent. No parameter search or post-test candidate changes. Weighted recall measures pre-cutoff gross-sales exposure among future inactivity events, not recoverable revenue or campaign uplift."
+}

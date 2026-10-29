@@ -6,6 +6,8 @@ from lifelines import KaplanMeierFitter, CoxPHFitter
 from lifelines.utils import concordance_index
 
 from .clv import build_rfm, fit_models
+from .time_utils import cutoff_timestamp
+from .landmark import snapshot, probabilities
 from .monte_carlo import compute_erl_days as compute_erl_days_mc
 
 # --------------------
@@ -44,7 +46,7 @@ def build_covariate_table(
     """
     df = transactions.copy()
     df["invoice_date"] = pd.to_datetime(df["invoice_date"])
-    cutoff = pd.to_datetime(cutoff_date)
+    cutoff = cutoff_timestamp(cutoff_date)
 
     # Observation window (inclusive)
     df = df[df["invoice_date"] <= cutoff]
@@ -397,236 +399,18 @@ def validate_cox_model(
         - c_index: Concordance index on validation set
         - interpretation: Dictionary with validation results interpretation
     """
-    from scipy import stats
-    from scipy.stats import combine_pvalues
-    
-    # Expected covariates (should match model)
-    expected_covariates = list(model.params_.index)
-    
-    # Step 1: Check proportional hazards assumption on training data
-    ph_test_results = []
-    ph_violations = []
-    ph_test_failed = False
-    ph_test_error_msg = None
-    
-    try:
-        # Use check_assumptions method for reliable PH testing
-        # This method performs Schoenfeld residual tests
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            # check_assumptions may print to stdout, but we'll capture the results
-            model.check_assumptions(train_df, p_value_threshold=0.05, show_plots=False)
-        
-        # Get Schoenfeld residuals
-        residuals = model.compute_residuals(train_df, kind='schoenfeld')
-        
-        # Verify we have residuals for all expected covariates
-        missing_covariates = [c for c in expected_covariates if c not in residuals.columns]
-        if missing_covariates:
-            ph_test_failed = True
-            ph_test_error_msg = f"Missing residuals for covariates: {missing_covariates}"
-        else:
-            # For each covariate, test if residuals are correlated with time
-            for covariate in expected_covariates:
-                # Get valid residuals (non-null)
-                valid_mask = residuals[covariate].notna()
-                n_valid = valid_mask.sum()
-                
-                if n_valid < 3:
-                    # Not enough data for test
-                    ph_test_results.append({
-                        'covariate': covariate,
-                        'test_statistic': np.nan,
-                        'p_value': np.nan,
-                        'violates_ph': False,
-                        'note': f'Insufficient data (n={n_valid})'
-                    })
-                    ph_test_failed = True
-                    continue
-                
-                res_values = residuals.loc[valid_mask, covariate].values
-                time_values = train_df.loc[valid_mask, 'duration'].values
-                
-                # Test correlation between residuals and time using Kendall's tau
-                # (rank correlation, more robust than Pearson)
-                tau, p_value = stats.kendalltau(time_values, res_values)
-                
-                # Check for NaN results
-                if np.isnan(p_value) or np.isnan(tau):
-                    ph_test_results.append({
-                        'covariate': covariate,
-                        'test_statistic': np.nan,
-                        'p_value': np.nan,
-                        'violates_ph': False,
-                        'note': 'Test computation produced NaN'
-                    })
-                    ph_test_failed = True
-                else:
-                    ph_test_results.append({
-                        'covariate': covariate,
-                        'test_statistic': tau,
-                        'p_value': p_value,
-                        'violates_ph': p_value < 0.05,
-                    })
-                    
-                    if p_value < 0.05:
-                        ph_violations.append(covariate)
-            
-            # Global test (overall PH assumption)
-            # Use Fisher's combined probability test across all covariates
-            valid_p_values = [r['p_value'] for r in ph_test_results 
-                            if not np.isnan(r['p_value'])]
-            
-            if len(valid_p_values) > 0:
-                global_stat, global_p = combine_pvalues(valid_p_values, method='fisher')
-                
-                # Check if global test is valid
-                if np.isnan(global_p):
-                    ph_test_failed = True
-                    global_entry = {
-                        'covariate': 'global',
-                        'test_statistic': np.nan,
-                        'p_value': np.nan,
-                        'violates_ph': False,
-                        'note': 'Global test computation produced NaN'
-                    }
-                else:
-                    global_entry = {
-                        'covariate': 'global',
-                        'test_statistic': global_stat,
-                        'p_value': global_p,
-                        'violates_ph': global_p < 0.05,
-                    }
-            else:
-                ph_test_failed = True
-                global_entry = {
-                    'covariate': 'global',
-                    'test_statistic': np.nan,
-                    'p_value': np.nan,
-                    'violates_ph': False,
-                    'note': 'No valid p-values for global test'
-                }
-            
-            # Create DataFrame with global test first, then per-covariate tests
-            ph_tests_df = pd.concat([
-                pd.DataFrame([global_entry]),
-                pd.DataFrame(ph_test_results)
-            ], ignore_index=True)
-            
-    except Exception as e:
-        # If PH test computation fails, report as failure
-        ph_test_failed = True
-        ph_test_error_msg = str(e)
-        ph_tests_df = pd.DataFrame([{
-            'covariate': 'computation_error',
-            'test_statistic': np.nan,
-            'p_value': np.nan,
-            'violates_ph': False,
-            'note': f'PH test failed: {ph_test_error_msg}'
-        }])
-        ph_violations = []
-    
-    # Verify all expected covariates have valid test results
-    if not ph_test_failed:
-        for cov in expected_covariates:
-            cov_results = ph_tests_df[ph_tests_df['covariate'] == cov]
-            if len(cov_results) == 0 or cov_results['p_value'].isna().any():
-                ph_test_failed = True
-                break
-    
-    # Step 2: Evaluate predictive performance on validation set
-    # Compute risk scores (partial hazards) for validation data
-    c_index = np.nan
-    c_index_failed = False
-    
-    try:
-        # Get covariates (exclude duration and event)
-        covariate_cols = [col for col in validation_df.columns 
-                         if col not in ['duration', 'event']]
-        
-        # Predict partial hazard (risk scores)
-        # Higher partial hazard = higher churn risk = shorter survival
-        risk_scores = model.predict_partial_hazard(validation_df[covariate_cols])
-        
-        # INVERT risk scores: higher score should correspond to longer survival
-        # For C-index, we want: higher predicted score = longer survival time
-        # So we use negative of risk scores (or 1/risk_scores, but negative is more stable)
-        survival_scores = -risk_scores.values
-        
-        # Compute C-index
-        # C-index measures: P(predicted longer survival > predicted shorter survival | actual longer survival > actual shorter survival)
-        c_index = concordance_index(
-            event_times=validation_df['duration'].values,
-            predicted_scores=survival_scores,
-            event_observed=validation_df['event'].values,
-        )
-        
-        # Validate C-index is in valid range [0, 1]
-        if np.isnan(c_index) or c_index < 0 or c_index > 1:
-            c_index_failed = True
-            if np.isnan(c_index):
-                c_index = np.nan
-            else:
-                c_index = np.clip(c_index, 0, 1)
-                
-    except Exception as e:
-        c_index = np.nan
-        c_index_failed = True
-    
-    # Interpretation
-    # PH assumption holds only if:
-    # 1. Tests were computed successfully (no failures)
-    # 2. All covariates have valid (non-NaN) test results
-    # 3. No covariate has p < 0.05
-    ph_assumption_holds = (
-        not ph_test_failed and
-        len(ph_violations) == 0 and
-        not ph_tests_df.empty and
-        ph_tests_df['covariate'].iloc[0] != 'computation_error' and
-        not ph_tests_df['p_value'].isna().any()
-    )
-    
-    ph_evaluable = not ph_test_failed and not ph_tests_df.empty and \
-                   ph_tests_df['covariate'].iloc[0] != 'computation_error'
-    
-    # C-index interpretation
-    if np.isnan(c_index) or c_index_failed:
-        c_index_interpretation = "C-index computation failed or produced invalid result"
-        acceptable_performance = False
-    elif c_index < 0.5:
-        c_index_interpretation = f"Poor discriminative performance (C-index={c_index:.4f} < 0.5, worse than random)"
-        acceptable_performance = False
-    elif c_index < 0.6:
-        c_index_interpretation = f"Weak discriminative performance (C-index={c_index:.4f} < 0.6)"
-        acceptable_performance = False
-    elif c_index >= 0.6 and c_index < 0.7:
-        c_index_interpretation = f"Moderate discriminative performance (C-index={c_index:.4f})"
-        acceptable_performance = True
-    elif c_index >= 0.7:
-        c_index_interpretation = f"Good discriminative performance (C-index={c_index:.4f} >= 0.7)"
-        acceptable_performance = True
-    else:
-        c_index_interpretation = f"Discriminative performance (C-index={c_index:.4f})"
-        acceptable_performance = c_index >= 0.6
-    
-    interpretation = {
-        'ph_assumption_holds': ph_assumption_holds,
-        'ph_evaluable': ph_evaluable,
-        'ph_violations': ph_violations,
-        'ph_test_failed': ph_test_failed,
-        'ph_test_error': ph_test_error_msg,
-        'acceptable_performance': acceptable_performance,
-        'c_index_interpretation': c_index_interpretation,
-        'c_index_failed': c_index_failed,
-    }
-    
-    return {
-        'ph_tests': ph_tests_df,
-        'ph_violations': ph_violations,
-        'c_index': c_index,
-        'interpretation': interpretation,
-    }
+    from lifelines.statistics import proportional_hazard_test
+    test = proportional_hazard_test(model, train_df, time_transform="rank")
+    ph = test.summary.reset_index().rename(columns={"index": "covariate", "p": "p_value"})
+    ph["violates_ph"] = ph["p_value"] < 0.05
+    violations = ph.loc[ph.violates_ph, "covariate"].tolist()
+    c_index = concordance_index(validation_df.duration,
+        -model.predict_partial_hazard(validation_df).to_numpy(), validation_df.event)
+    return {"ph_tests": ph, "ph_violations": violations, "c_index": float(c_index),
+        "interpretation": {"ph_assumption_holds": not violations, "ph_evaluable": True,
+            "ph_violations": violations, "ph_test_failed": False, "ph_test_error": None,
+            "acceptable_performance": bool(c_index >= .6), "c_index_failed": False,
+            "c_index_interpretation": "Retrospective random-split C-index; use temporal evaluation for predictive claims"}}
 
 
 def score_customers(
@@ -665,10 +449,20 @@ def score_customers(
         Risk scores represent relative churn risk and are intended for prioritization,
         not probability estimation.
     """
+    if hasattr(model, "landmark_followup_days_"):
+        features = snapshot(transactions, cutoff_date, getattr(model, "inactivity_days_", 90))
+        if covariate_df is not None and "event" in covariate_df:
+            features = features.loc[features.index.isin(covariate_df.loc[covariate_df.event == 0, "customer_id"])]
+        result = features.reset_index()
+        result["risk_score"] = model.predict_partial_hazard(features).to_numpy()
+        result["risk_rank"] = result.risk_score.rank(method="min", ascending=False).astype(int)
+        result["risk_percentile"] = result.risk_score.rank(pct=True) * 100
+        result["risk_bucket"] = np.select([result.risk_percentile >= 90, result.risk_percentile >= 70], ["High", "Medium"], default="Low")
+        return result[["customer_id", "n_orders", "log_monetary_value", "product_diversity", "risk_score", "risk_rank", "risk_percentile", "risk_bucket"]].sort_values("risk_score", ascending=False).reset_index(drop=True)
     # Step 1: Feature construction at cutoff (leakage-free)
     df = transactions.copy()
     df["invoice_date"] = pd.to_datetime(df["invoice_date"])
-    cutoff = pd.to_datetime(cutoff_date)
+    cutoff = cutoff_timestamp(cutoff_date)
     
     # Filter to data up to cutoff (inclusive)
     df = df[df["invoice_date"] <= cutoff]
@@ -820,6 +614,13 @@ def predict_churn_probability(
         - survival_at_t0: Survival probability at t0
         - survival_at_t0_plus_X: Survival probability at t0 + X
     """
+    if hasattr(model, "landmark_followup_days_"):
+        features = snapshot(transactions, cutoff_date, inactivity_days)
+        p = probabilities(model, features, X_days)
+        return pd.DataFrame({"customer_id": features.index, "t0": 0.0,
+            "X_days": X_days, "churn_probability": p.to_numpy(),
+            "survival_at_t0": 1.0, "survival_at_t0_plus_X": 1 - p.to_numpy()
+        }).sort_values("churn_probability", ascending=False).reset_index(drop=True)
     # Step 1: Build covariate table to get tenure_days and event
     cov_table = build_covariate_table(
         transactions=transactions,
@@ -974,6 +775,8 @@ def build_segmentation_table(
     transactions: pd.DataFrame,
     covariates_df: pd.DataFrame,
     cutoff_date: str = CUTOFF_DATE,
+    inactivity_days: int = INACTIVITY_DAYS,
+    H_days: int = 1825,
 ) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """
     Builds final segmentation table combining risk labels and expected remaining lifetime.
@@ -1009,7 +812,7 @@ def build_segmentation_table(
     # Step 2: Compute ERL using Monte Carlo (BG/NBD)
     transactions_df = transactions.copy()
     transactions_df["invoice_date"] = pd.to_datetime(transactions_df["invoice_date"])
-    cutoff_dt = pd.to_datetime(cutoff_date)
+    cutoff_dt = cutoff_timestamp(cutoff_date)
     rfm = build_rfm(transactions, cutoff_date)
     last_purchases = (
         transactions_df[transactions_df["invoice_date"] <= cutoff_dt]
@@ -1025,7 +828,8 @@ def build_segmentation_table(
         bgf=clv_result.bgnbd,
         customer_summary_df=customer_summary,
         cutoff_date=cutoff_date,
-        INACTIVITY_DAYS=INACTIVITY_DAYS,
+        INACTIVITY_DAYS=inactivity_days,
+        max_days=H_days,
     )
     df_erl = df_erl.rename(columns={"ERL_days": "erl_days"})
     # Keep only active customers (Monte Carlo: erl_days > 0; ERL=0 means already churned)

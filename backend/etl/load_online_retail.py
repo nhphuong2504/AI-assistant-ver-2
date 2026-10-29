@@ -1,9 +1,11 @@
 import pandas as pd
 import sqlite3
+import numpy as np
 from pathlib import Path
 
-RAW_PATH = Path("data/raw/online_retail.csv")
-DB_PATH = Path("data/retail.sqlite")
+BASE_PATH = Path(__file__).resolve().parents[1]
+RAW_PATH = BASE_PATH / "data/raw/online_retail.csv"
+DB_PATH = BASE_PATH / "data/retail.sqlite"
 
 REQUIRED_COLS = {
     "InvoiceNo", "StockCode", "Description", "Quantity",
@@ -26,11 +28,14 @@ def load_csv() -> pd.DataFrame:
     return df
 
 def clean_and_flag(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    # Flag exact repeated source rows; retain every row in the audit table.
+    df["is_duplicate"] = df.duplicated(subset=sorted(REQUIRED_COLS), keep="first")
     # Flags
     df["is_cancelled"] = df["InvoiceNo"].astype(str).str.startswith("C")
     df["is_missing_customer"] = df["CustomerID"].isna()
-    df["is_return"] = df["Quantity"] <= 0
-    df["is_invalid_price"] = df["UnitPrice"] <= 0
+    df["is_return"] = (df["Quantity"] <= 0) | ~np.isfinite(df["Quantity"])
+    df["is_invalid_price"] = (df["UnitPrice"] <= 0) | ~np.isfinite(df["UnitPrice"])
     df["is_bad_date"] = df["InvoiceDate"].isna()
 
     # Revenue
@@ -43,6 +48,7 @@ def clean_and_flag(df: pd.DataFrame) -> pd.DataFrame:
         | df["is_return"]
         | df["is_invalid_price"]
         | df["is_bad_date"]
+        | df["is_duplicate"]
     )
 
     # Types
@@ -95,7 +101,7 @@ def main():
     print(f"Total rows: {len(df):,}")
     print(f"Clean rows: {int(df['include_clean'].sum()):,}")
     print("Date range (raw parsed):",
-          df["invoice_date"].min(), "→", df["invoice_date"].max())
+          df["invoice_date"].min(), "to", df["invoice_date"].max())
 
 if __name__ == "__main__":
     main()

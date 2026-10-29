@@ -1,6 +1,7 @@
 import os
 import re
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -29,7 +30,8 @@ def get_conn() -> sqlite3.Connection:
             f"Or set DATABASE_PATH environment variable to point to your database file."
         )
         raise FileNotFoundError(error_msg)
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)
+    conn.execute("PRAGMA query_only=ON")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -47,7 +49,7 @@ def ensure_select_only(sql: str) -> str:
     if MULTI_STMT.search(s):
         raise ValueError("Multiple statements are not allowed.")
 
-    return s
+    return s.rstrip(";").rstrip()
 
 
 def ensure_limit(sql: str, limit: int) -> str:
@@ -61,7 +63,7 @@ def run_query(sql: str, limit: int = 1000, max_rows: int = 10000) -> Tuple[List[
     sql = ensure_select_only(sql)
     sql = ensure_limit(sql, limit)
 
-    with get_conn() as conn:
+    with closing(get_conn()) as conn:
         cur = conn.execute(sql)
         rows = cur.fetchmany(max_rows)  # hard cap
         cols = [d[0] for d in cur.description] if cur.description else []
@@ -70,7 +72,7 @@ def run_query(sql: str, limit: int = 1000, max_rows: int = 10000) -> Tuple[List[
 
 
 def get_schema() -> Dict[str, Any]:
-    with get_conn() as conn:
+    with closing(get_conn()) as conn:
         tables = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         ).fetchall()
@@ -97,7 +99,7 @@ def run_query_internal(sql: str, max_rows: int = 2_000_000):
         raise ValueError("Multiple statements are not allowed.")
     if FORBIDDEN.search(s):
         raise ValueError("Forbidden keyword detected.")
-    with get_conn() as conn:
+    with closing(get_conn()) as conn:
         cur = conn.execute(s)
         rows = cur.fetchmany(max_rows)
         cols = [d[0] for d in cur.description] if cur.description else []

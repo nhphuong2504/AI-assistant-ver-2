@@ -1,0 +1,3 @@
+# The frozen selection records a byte-level SHA-256 of this protocol.
+# Preserve LF on Windows checkouts so the serving hash remains portable.
+backend/analytics/decision_protocol.json text eol=lf

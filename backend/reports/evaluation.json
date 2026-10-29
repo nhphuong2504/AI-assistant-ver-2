@@ -1,0 +1,896 @@
+{
+  "protocol": {
+    "seed": 42,
+    "horizon_days": 90,
+    "splits": [
+      [
+        "development",
+        "2011-06-09"
+      ],
+      [
+        "final_test",
+        "2011-09-09"
+      ]
+    ],
+    "selection": "BG/NBD .05, Cox .1. Gamma-Gamma unpenalized: development-only parameter diagnostic found .01 forces q=1 (infinite population mean). No holdout-based scaling or model selection.",
+    "bootstrap_scope": "Paired customer resampling within fold; no refitting, no seasonal or cross-period uncertainty.",
+    "evaluation_status": "Retrospective temporal holdout; final window rerun for numerical bug fixes. Not a pristine prospective experiment."
+  },
+  "data": {
+    "sha256": "f0d4e4f72b6bc62ce831e8243bc02e491fda0085c1d94f3075063411539b1f04",
+    "raw_rows": 541909,
+    "clean_rows": 392692,
+    "customers": 4338,
+    "invoices": 18532,
+    "gross_sales_gbp": 8887208.894000001,
+    "start": "2010-12-01 08:26:00",
+    "end": "2011-12-09 12:50:00",
+    "flags": {
+      "is_duplicate": 5268,
+      "is_cancelled": 9288,
+      "is_missing_customer": 135080,
+      "is_return": 10624,
+      "is_invalid_price": 2517,
+      "is_bad_date": 0
+    },
+    "duplicate_policy": "Exclude exact source duplicates from analytics; retain audit rows. Identical legitimate lines cannot be distinguished without source event IDs."
+  },
+  "environment": {
+    "python": "3.13.9",
+    "numpy": "2.4.1",
+    "pandas": "2.3.3",
+    "scipy": "1.17.0",
+    "lifetimes": "0.11.3",
+    "lifelines": "0.30.0"
+  },
+  "splits": {
+    "development": {
+      "cutoff": "2011-06-09",
+      "end": "2011-09-07",
+      "clv": {
+        "customers": 2787,
+        "repeat_customers": 1412,
+        "zero_future_purchase_customers": 1456,
+        "purchase_unit": "customer purchase-day",
+        "currency": "GBP gross positive sales, not profit or net revenue",
+        "purchase_models": {
+          "bgnbd_gamma_gamma": {
+            "n": 2787,
+            "mae": 0.8037694222038215,
+            "rmse": 1.1670229160057404,
+            "actual_total": 2810.0,
+            "predicted_total": 3030.1737747609773,
+            "aggregate_bias_pct": 7.835365649856851,
+            "top20_capture": 0.5398576512455516,
+            "top20_lift": 2.6963857957371906
+          },
+          "last90": {
+            "n": 2787,
+            "mae": 0.8704700394689631,
+            "rmse": 1.295295232010683,
+            "actual_total": 2810.0,
+            "predicted_total": 3626.0,
+            "aggregate_bias_pct": 29.03914590747332,
+            "top20_capture": 0.5263345195729537,
+            "top20_lift": 2.6288428423831935
+          },
+          "zero": {
+            "n": 2787,
+            "mae": 1.0082526013634732,
+            "rmse": 2.139216412713635,
+            "actual_total": 2810.0,
+            "predicted_total": 0.0,
+            "aggregate_bias_pct": -100.0,
+            "top20_capture": 0.19608540925266904,
+            "top20_lift": 0.9793728236329545
+          }
+        },
+        "revenue_models": {
+          "bgnbd_gamma_gamma": {
+            "n": 2787,
+            "mae": 427.98743181645864,
+            "rmse": 1541.230536805669,
+            "actual_total": 1552002.84,
+            "predicted_total": 1436525.1091187238,
+            "aggregate_bias_pct": -7.440561827920133,
+            "top20_capture": 0.716836832592394,
+            "top20_lift": 3.580330201496419
+          },
+          "last90": {
+            "n": 2787,
+            "mae": 447.4990315751704,
+            "rmse": 1621.2304410704583,
+            "actual_total": 1552002.84,
+            "predicted_total": 1730658.4810000001,
+            "aggregate_bias_pct": 11.511296010257311,
+            "top20_capture": 0.7097827411192108,
+            "top20_lift": 3.5450976693534777
+          },
+          "zero": {
+            "n": 2787,
+            "mae": 556.8722066738429,
+            "rmse": 2682.922106223817,
+            "actual_total": 1552002.84,
+            "predicted_total": 0.0,
+            "aggregate_bias_pct": -100.0,
+            "top20_capture": 0.2182276096865905,
+            "top20_lift": 1.0899647817142073
+          }
+        },
+        "bgnbd_parameters": {
+          "r": 0.5749950493890171,
+          "alpha": 47.088185550821606,
+          "a": 4.529909107361702e-23,
+          "b": 2.98940903859185e-13
+        },
+        "gamma_gamma_parameters": {
+          "p": 3.13594975529272,
+          "q": 3.105727108599545,
+          "v": 281.8530353670449
+        },
+        "frequency_monetary_spearman": 0.13036595881113128,
+        "paired_purchase_mae_vs_last90": {
+          "metric": "mae",
+          "candidate_minus_baseline": -0.06670061726514165,
+          "ci95": [
+            -0.09221385774811383,
+            -0.042058093209236716
+          ],
+          "resamples": 1000
+        },
+        "paired_revenue_mae_vs_last90": {
+          "metric": "mae",
+          "candidate_minus_baseline": -19.5115997587118,
+          "ci95": [
+            -44.07788921745445,
+            4.875250498274602
+          ],
+          "resamples": 1000
+        },
+        "segments": {
+          "False": {
+            "revenue": {
+              "n": 1375,
+              "mae": 247.17752720076527,
+              "rmse": 410.79605640665824,
+              "actual_total": 207988.31,
+              "predicted_total": 269478.6109611037,
+              "aggregate_bias_pct": 29.564306263704765,
+              "top20_capture": 0.19141013261754952,
+              "top20_lift": 0.9570506630877476
+            },
+            "purchases": {
+              "n": 1375,
+              "mae": 0.5760485905081212,
+              "rmse": 0.7745637696779478,
+              "actual_total": 546.0,
+              "predicted_total": 619.4629795739462,
+              "aggregate_bias_pct": 13.45475816372641,
+              "top20_capture": 0.2326007326007326,
+              "top20_lift": 1.1630036630036629
+            }
+          },
+          "True": {
+            "revenue": {
+              "n": 1412,
+              "mae": 604.0593998381147,
+              "rmse": 2127.0183505729615,
+              "actual_total": 1344014.53,
+              "predicted_total": 1167046.4981576202,
+              "aggregate_bias_pct": -13.16712192407472,
+              "top20_capture": 0.7091067460409077,
+              "top20_lift": 3.538016697560995
+            },
+            "purchases": {
+              "n": 1412,
+              "mae": 1.0255230649669858,
+              "rmse": 1.4505063561127802,
+              "actual_total": 2264.0,
+              "predicted_total": 2410.7107951870307,
+              "aggregate_bias_pct": 6.480158798013735,
+              "top20_capture": 0.482773851590106,
+              "top20_lift": 2.4087515139407407
+            }
+          }
+        }
+      },
+      "churn": {
+        "training_customers": 1599,
+        "training_start": "2011-03-11",
+        "training_end": "2011-06-09",
+        "inactivity_days": 90,
+        "models": {
+          "landmark_cox": {
+            "n": 1961,
+            "events": 1120,
+            "prevalence": 0.5711371749107598,
+            "roc_auc": 0.8165152029896382,
+            "average_precision": 0.8501733114090715,
+            "brier": 0.17937649283027646,
+            "mean_probability": 0.5216242018551361,
+            "top20_precision": 0.9185750636132316,
+            "top20_recall": 0.3223214285714286
+          },
+          "recency_bins": {
+            "n": 1961,
+            "events": 1120,
+            "prevalence": 0.5711371749107598,
+            "roc_auc": 0.7099971335145235,
+            "average_precision": 0.7452487774691116,
+            "brier": 0.2078886815355445,
+            "mean_probability": 0.5674038805392156,
+            "top20_precision": 0.9083969465648855,
+            "top20_recall": 0.31875
+          },
+          "recency_logistic": {
+            "n": 1961,
+            "events": 1120,
+            "prevalence": 0.5711371749107598,
+            "roc_auc": 0.7310323594360455,
+            "average_precision": 0.7977257909415689,
+            "brier": 0.20463984153751927,
+            "mean_probability": 0.5637615631854108,
+            "top20_precision": 0.9083969465648855,
+            "top20_recall": 0.31875
+          },
+          "historical_prevalence": {
+            "n": 1961,
+            "events": 1120,
+            "prevalence": 0.5711371749107598,
+            "roc_auc": 0.5,
+            "average_precision": 0.5711371749107598,
+            "brier": 0.24525159893215226,
+            "mean_probability": 0.5534709193245779,
+            "top20_precision": 0.5750636132315522,
+            "top20_recall": 0.2017857142857143
+          }
+        },
+        "paired_brier_vs_recency_logistic": {
+          "metric": "brier",
+          "candidate_minus_baseline": -0.025263348707242807,
+          "ci95": [
+            -0.030899493218359067,
+            -0.019024803614653717
+          ],
+          "resamples": 1000
+        },
+        "calibration_deciles": [
+          {
+            "customers": 197,
+            "mean_probability": 0.07595800452691334,
+            "event_rate": 0.05583756345177665
+          },
+          {
+            "customers": 196,
+            "mean_probability": 0.15797405217121627,
+            "event_rate": 0.28061224489795916
+          },
+          {
+            "customers": 196,
+            "mean_probability": 0.24388471742165937,
+            "event_rate": 0.37755102040816324
+          },
+          {
+            "customers": 196,
+            "mean_probability": 0.3296074083421376,
+            "event_rate": 0.4642857142857143
+          },
+          {
+            "customers": 196,
+            "mean_probability": 0.4262915392760287,
+            "event_rate": 0.5306122448979592
+          },
+          {
+            "customers": 196,
+            "mean_probability": 0.5422931262916667,
+            "event_rate": 0.6479591836734694
+          },
+          {
+            "customers": 196,
+            "mean_probability": 0.6780745388581635,
+            "event_rate": 0.6989795918367347
+          },
+          {
+            "customers": 196,
+            "mean_probability": 0.8273285081494981,
+            "event_rate": 0.8214285714285714
+          },
+          {
+            "customers": 196,
+            "mean_probability": 0.9436030798876491,
+            "event_rate": 0.8775510204081632
+          },
+          {
+            "customers": 196,
+            "mean_probability": 0.9935008507556538,
+            "event_rate": 0.9591836734693877
+          }
+        ],
+        "paired_brier_vs_recency_bins": {
+          "metric": "brier",
+          "candidate_minus_baseline": -0.028512188705268053,
+          "ci95": [
+            -0.03469407853234331,
+            -0.021804357349790027
+          ],
+          "resamples": 1000
+        },
+        "ph_rank_p_values": {
+          "log_monetary_value": 0.36587589198651216,
+          "log_n_orders": 0.342723406831628,
+          "log_product_diversity": 0.02313038206851104,
+          "recency_from_cutoff": 6.430938558001709e-85,
+          "tenure_days": 4.3792612972592386e-11
+        },
+        "coefficients": {
+          "log_n_orders": -1.0231126873876337,
+          "log_monetary_value": -0.09846057445251365,
+          "log_product_diversity": -0.09052758915335563,
+          "recency_from_cutoff": 0.03237184698202419,
+          "tenure_days": -0.0006818305055142935
+        }
+      }
+    },
+    "final_test": {
+      "cutoff": "2011-09-09",
+      "end": "2011-12-08",
+      "clv": {
+        "customers": 3362,
+        "repeat_customers": 1956,
+        "zero_future_purchase_customers": 1449,
+        "purchase_unit": "customer purchase-day",
+        "currency": "GBP gross positive sales, not profit or net revenue",
+        "purchase_models": {
+          "bgnbd_gamma_gamma": {
+            "n": 3362,
+            "mae": 0.925587107089033,
+            "rmse": 1.4874872736997427,
+            "actual_total": 4434.0,
+            "predicted_total": 3327.45978971611,
+            "aggregate_bias_pct": -24.955800863416545,
+            "top20_capture": 0.5020297699594046,
+            "top20_lift": 2.5079109756367286
+          },
+          "last90": {
+            "n": 3362,
+            "mae": 0.9405116002379535,
+            "rmse": 1.4741476328060072,
+            "actual_total": 4434.0,
+            "predicted_total": 3600.0,
+            "aggregate_bias_pct": -18.809201623815962,
+            "top20_capture": 0.4799278304014434,
+            "top20_lift": 2.3974998006086965
+          },
+          "zero": {
+            "n": 3362,
+            "mae": 1.3188578227245686,
+            "rmse": 2.601194069833152,
+            "actual_total": 4434.0,
+            "predicted_total": 0.0,
+            "aggregate_bias_pct": -100.0,
+            "top20_capture": 0.2074875958502481,
+            "top20_lift": 1.0365130716917297
+          }
+        },
+        "revenue_models": {
+          "bgnbd_gamma_gamma": {
+            "n": 3362,
+            "mae": 579.5046975950523,
+            "rmse": 2988.087123273097,
+            "actual_total": 2657588.3109999998,
+            "predicted_total": 1581980.3293518987,
+            "aggregate_bias_pct": -40.473085210228454,
+            "top20_capture": 0.6935873371998739,
+            "top20_lift": 3.464844914808285
+          },
+          "last90": {
+            "n": 3362,
+            "mae": 601.9867555026769,
+            "rmse": 2825.9142350435795,
+            "actual_total": 2657588.3109999998,
+            "predicted_total": 1850707.9810000001,
+            "aggregate_bias_pct": -30.36137413233827,
+            "top20_capture": 0.6578491682717219,
+            "top20_lift": 3.286313378498557
+          },
+          "zero": {
+            "n": 3362,
+            "mae": 790.4783792385484,
+            "rmse": 4160.084261489802,
+            "actual_total": 2657588.3109999998,
+            "predicted_total": 0.0,
+            "aggregate_bias_pct": -100.0,
+            "top20_capture": 0.200090532758217,
+            "top20_lift": 0.9995607297669028
+          }
+        },
+        "bgnbd_parameters": {
+          "r": 0.5946910205887016,
+          "alpha": 53.74744430685707,
+          "a": 4.52866055402713e-22,
+          "b": 8.706718506184247e-13
+        },
+        "gamma_gamma_parameters": {
+          "p": 2.3321356253081786,
+          "q": 3.334260855345439,
+          "v": 410.1989048964858
+        },
+        "frequency_monetary_spearman": 0.18161207307395263,
+        "paired_purchase_mae_vs_last90": {
+          "metric": "mae",
+          "candidate_minus_baseline": -0.014924493148920581,
+          "ci95": [
+            -0.0379286116021931,
+            0.007361539652817235
+          ],
+          "resamples": 1000
+        },
+        "paired_revenue_mae_vs_last90": {
+          "metric": "mae",
+          "candidate_minus_baseline": -22.482057907624476,
+          "ci95": [
+            -58.69184315657325,
+            11.130071527567665
+          ],
+          "resamples": 1000
+        },
+        "segments": {
+          "False": {
+            "revenue": {
+              "n": 1406,
+              "mae": 263.6692035767081,
+              "rmse": 624.2573038430897,
+              "actual_total": 315148.79000000004,
+              "predicted_total": 200574.1272001238,
+              "aggregate_bias_pct": -36.35573622220674,
+              "top20_capture": 0.22563361261834447,
+              "top20_lift": 1.1249675863169941
+            },
+            "purchases": {
+              "n": 1406,
+              "mae": 0.6349949187345943,
+              "rmse": 0.956883808799255,
+              "actual_total": 801.0,
+              "predicted_total": 480.6136831880018,
+              "aggregate_bias_pct": -39.99829173682874,
+              "top20_capture": 0.2571785268414482,
+              "top20_lift": 1.2822447118406957
+            }
+          },
+          "True": {
+            "revenue": {
+              "n": 1956,
+              "mae": 806.5316426818583,
+              "rmse": 3881.5709731363095,
+              "actual_total": 2342439.521,
+              "predicted_total": 1381406.202151775,
+              "aggregate_bias_pct": -41.02702802922121,
+              "top20_capture": 0.6836449972959622,
+              "top20_lift": 3.411249017119648
+            },
+            "purchases": {
+              "n": 1956,
+              "mae": 1.1344688130329703,
+              "rmse": 1.7733905679821507,
+              "actual_total": 3633.0,
+              "predicted_total": 2846.846106528108,
+              "aggregate_bias_pct": -21.639248375224106,
+              "top20_capture": 0.47288742086429947,
+              "top20_lift": 2.359611722475943
+            }
+          }
+        }
+      },
+      "churn": {
+        "training_customers": 1983,
+        "training_start": "2011-06-11",
+        "training_end": "2011-09-09",
+        "inactivity_days": 90,
+        "models": {
+          "landmark_cox": {
+            "n": 1899,
+            "events": 940,
+            "prevalence": 0.49499736703528174,
+            "roc_auc": 0.8326525858052493,
+            "average_precision": 0.8333480885544262,
+            "brier": 0.1721345632990253,
+            "mean_probability": 0.5552088998249907,
+            "top20_precision": 0.9157894736842105,
+            "top20_recall": 0.3702127659574468
+          },
+          "recency_bins": {
+            "n": 1899,
+            "events": 940,
+            "prevalence": 0.49499736703528174,
+            "roc_auc": 0.7538254609189537,
+            "average_precision": 0.7230039791131433,
+            "brier": 0.20332660159788246,
+            "mean_probability": 0.5742426440371747,
+            "top20_precision": 0.8973684210526316,
+            "top20_recall": 0.3627659574468085
+          },
+          "recency_logistic": {
+            "n": 1899,
+            "events": 940,
+            "prevalence": 0.49499736703528174,
+            "roc_auc": 0.7707269318660839,
+            "average_precision": 0.7922446464928351,
+            "brier": 0.20157811560196662,
+            "mean_probability": 0.5770723004473001,
+            "top20_precision": 0.9,
+            "top20_recall": 0.3638297872340426
+          },
+          "historical_prevalence": {
+            "n": 1899,
+            "events": 940,
+            "prevalence": 0.49499736703528174,
+            "roc_auc": 0.5,
+            "average_precision": 0.49499736703528174,
+            "brier": 0.25627693316662775,
+            "mean_probability": 0.5743822491174987,
+            "top20_precision": 0.5184210526315789,
+            "top20_recall": 0.20957446808510638
+          }
+        },
+        "paired_brier_vs_recency_logistic": {
+          "metric": "brier",
+          "candidate_minus_baseline": -0.029443552302941368,
+          "ci95": [
+            -0.034683422949026876,
+            -0.02395569272395154
+          ],
+          "resamples": 1000
+        },
+        "calibration_deciles": [
+          {
+            "customers": 190,
+            "mean_probability": 0.09285435173934932,
+            "event_rate": 0.010526315789473684
+          },
+          {
+            "customers": 190,
+            "mean_probability": 0.1850566121111622,
+            "event_rate": 0.14736842105263157
+          },
+          {
+            "customers": 190,
+            "mean_probability": 0.27946482591521804,
+            "event_rate": 0.3
+          },
+          {
+            "customers": 190,
+            "mean_probability": 0.3774243838736485,
+            "event_rate": 0.37894736842105264
+          },
+          {
+            "customers": 190,
+            "mean_probability": 0.4802027634694384,
+            "event_rate": 0.4473684210526316
+          },
+          {
+            "customers": 189,
+            "mean_probability": 0.5936353853662594,
+            "event_rate": 0.5291005291005291
+          },
+          {
+            "customers": 190,
+            "mean_probability": 0.7295316484055909,
+            "event_rate": 0.5684210526315789
+          },
+          {
+            "customers": 190,
+            "mean_probability": 0.8615331461749962,
+            "event_rate": 0.7368421052631579
+          },
+          {
+            "customers": 190,
+            "mean_probability": 0.9563984902559467,
+            "event_rate": 0.8736842105263158
+          },
+          {
+            "customers": 190,
+            "mean_probability": 0.9961896355990411,
+            "event_rate": 0.9578947368421052
+          }
+        ],
+        "paired_brier_vs_recency_bins": {
+          "metric": "brier",
+          "candidate_minus_baseline": -0.03119203829885721,
+          "ci95": [
+            -0.03712400818975176,
+            -0.02508524333619092
+          ],
+          "resamples": 1000
+        },
+        "ph_rank_p_values": {
+          "log_monetary_value": 0.00588386237736715,
+          "log_n_orders": 0.028580496497418662,
+          "log_product_diversity": 0.5387106113467989,
+          "recency_from_cutoff": 9.555639027677392e-166,
+          "tenure_days": 0.1381931628099069
+        },
+        "coefficients": {
+          "log_n_orders": -0.8171455704810525,
+          "log_monetary_value": -0.11149598976875,
+          "log_product_diversity": -0.18448296198097522,
+          "recency_from_cutoff": 0.031852898243689455,
+          "tenure_days": 0.00038335493504771724
+        }
+      }
+    }
+  },
+  "sensitivity": {
+    "60": {
+      "training_customers": 1543,
+      "training_start": "2011-06-11",
+      "training_end": "2011-09-09",
+      "inactivity_days": 60,
+      "models": {
+        "landmark_cox": {
+          "n": 1491,
+          "events": 987,
+          "prevalence": 0.6619718309859155,
+          "roc_auc": 0.8383449124330583,
+          "average_precision": 0.9005232983626,
+          "brier": 0.14991979529745478,
+          "mean_probability": 0.682234669427962,
+          "top20_precision": 0.9531772575250836,
+          "top20_recall": 0.2887537993920973
+        },
+        "recency_bins": {
+          "n": 1491,
+          "events": 987,
+          "prevalence": 0.6619718309859155,
+          "roc_auc": 0.7168186423505573,
+          "average_precision": 0.794256243694179,
+          "brier": 0.19712500846334924,
+          "mean_probability": 0.7246793579708063,
+          "top20_precision": 0.8662207357859532,
+          "top20_recall": 0.2624113475177305
+        },
+        "recency_logistic": {
+          "n": 1491,
+          "events": 987,
+          "prevalence": 0.6619718309859155,
+          "roc_auc": 0.7421207844840064,
+          "average_precision": 0.8487839296773195,
+          "brier": 0.19380078819293953,
+          "mean_probability": 0.7269007153520914,
+          "top20_precision": 0.9230769230769231,
+          "top20_recall": 0.2796352583586626
+        },
+        "historical_prevalence": {
+          "n": 1491,
+          "events": 987,
+          "prevalence": 0.6619718309859155,
+          "roc_auc": 0.5,
+          "average_precision": 0.6619718309859155,
+          "brier": 0.22768272288523608,
+          "mean_probability": 0.7245625405055086,
+          "top20_precision": 0.6622073578595318,
+          "top20_recall": 0.2006079027355623
+        }
+      },
+      "paired_brier_vs_recency_logistic": {
+        "metric": "brier",
+        "candidate_minus_baseline": -0.043880992895484784,
+        "ci95": [
+          -0.051153979171523575,
+          -0.036084284484813364
+        ],
+        "resamples": 1000
+      },
+      "calibration_deciles": [
+        {
+          "customers": 150,
+          "mean_probability": 0.17052993757446036,
+          "event_rate": 0.08
+        },
+        {
+          "customers": 149,
+          "mean_probability": 0.31656851035366734,
+          "event_rate": 0.3221476510067114
+        },
+        {
+          "customers": 149,
+          "mean_probability": 0.45726016897010574,
+          "event_rate": 0.48322147651006714
+        },
+        {
+          "customers": 149,
+          "mean_probability": 0.5732462422758177,
+          "event_rate": 0.6174496644295302
+        },
+        {
+          "customers": 149,
+          "mean_probability": 0.6953293548181824,
+          "event_rate": 0.697986577181208
+        },
+        {
+          "customers": 149,
+          "mean_probability": 0.7943617130079684,
+          "event_rate": 0.8322147651006712
+        },
+        {
+          "customers": 149,
+          "mean_probability": 0.8816477152928676,
+          "event_rate": 0.8120805369127517
+        },
+        {
+          "customers": 149,
+          "mean_probability": 0.9486438682883651,
+          "event_rate": 0.87248322147651
+        },
+        {
+          "customers": 149,
+          "mean_probability": 0.988997192436969,
+          "event_rate": 0.9463087248322147
+        },
+        {
+          "customers": 149,
+          "mean_probability": 0.9991962512065411,
+          "event_rate": 0.959731543624161
+        }
+      ],
+      "paired_brier_vs_recency_bins": {
+        "metric": "brier",
+        "candidate_minus_baseline": -0.0472052131658945,
+        "ci95": [
+          -0.055007182565624285,
+          -0.038940191472663484
+        ],
+        "resamples": 1000
+      },
+      "ph_rank_p_values": {
+        "log_monetary_value": 0.40323649873213696,
+        "log_n_orders": 0.003189716356801861,
+        "log_product_diversity": 0.07916038248934085,
+        "recency_from_cutoff": 7.113879120306668e-131,
+        "tenure_days": 0.35499460404666294
+      },
+      "coefficients": {
+        "log_n_orders": -0.8674993711971097,
+        "log_monetary_value": -0.11884324432712154,
+        "log_product_diversity": -0.13513693927210987,
+        "recency_from_cutoff": 0.041900423383957164,
+        "tenure_days": 0.0006535271319595454
+      }
+    },
+    "180": {
+      "training_customers": 2631,
+      "training_start": "2011-06-11",
+      "training_end": "2011-09-09",
+      "inactivity_days": 180,
+      "models": {
+        "landmark_cox": {
+          "n": 2779,
+          "events": 609,
+          "prevalence": 0.21914357682619648,
+          "roc_auc": 0.963009541970292,
+          "average_precision": 0.8581074873316397,
+          "brier": 0.07400332726858976,
+          "mean_probability": 0.30218148596458067,
+          "top20_precision": 0.8057553956834532,
+          "top20_recall": 0.735632183908046
+        },
+        "recency_bins": {
+          "n": 2779,
+          "events": 609,
+          "prevalence": 0.21914357682619648,
+          "roc_auc": 0.847926267281106,
+          "average_precision": 0.4799054373522459,
+          "brier": 0.11400618141495843,
+          "mean_probability": 0.21655602031362892,
+          "top20_precision": 0.4856115107913669,
+          "top20_recall": 0.4433497536945813
+        },
+        "recency_logistic": {
+          "n": 2779,
+          "events": 609,
+          "prevalence": 0.21914357682619648,
+          "roc_auc": 0.9686102472134571,
+          "average_precision": 0.869366077673235,
+          "brier": 0.06245689482477014,
+          "mean_probability": 0.24970003577981836,
+          "top20_precision": 0.814748201438849,
+          "top20_recall": 0.7438423645320197
+        },
+        "historical_prevalence": {
+          "n": 2779,
+          "events": 609,
+          "prevalence": 0.21914357682619648,
+          "roc_auc": 0.5,
+          "average_precision": 0.21914357682619648,
+          "brier": 0.17188040501687848,
+          "mean_probability": 0.1915621436716078,
+          "top20_precision": 0.19424460431654678,
+          "top20_recall": 0.17733990147783252
+        }
+      },
+      "paired_brier_vs_recency_logistic": {
+        "metric": "brier",
+        "candidate_minus_baseline": 0.01154643244381961,
+        "ci95": [
+          0.009040592024496842,
+          0.014077490424793377
+        ],
+        "resamples": 1000
+      },
+      "calibration_deciles": [
+        {
+          "customers": 278,
+          "mean_probability": 0.022883160263523744,
+          "event_rate": 0.0
+        },
+        {
+          "customers": 278,
+          "mean_probability": 0.037877419440455584,
+          "event_rate": 0.0
+        },
+        {
+          "customers": 278,
+          "mean_probability": 0.053222343612107204,
+          "event_rate": 0.0
+        },
+        {
+          "customers": 278,
+          "mean_probability": 0.07463356366907474,
+          "event_rate": 0.0
+        },
+        {
+          "customers": 278,
+          "mean_probability": 0.1111382902266975,
+          "event_rate": 0.0
+        },
+        {
+          "customers": 277,
+          "mean_probability": 0.1788153969484822,
+          "event_rate": 0.0036101083032490976
+        },
+        {
+          "customers": 278,
+          "mean_probability": 0.30000977268521856,
+          "event_rate": 0.14388489208633093
+        },
+        {
+          "customers": 278,
+          "mean_probability": 0.49220221236889267,
+          "event_rate": 0.4316546762589928
+        },
+        {
+          "customers": 278,
+          "mean_probability": 0.7720483270057038,
+          "event_rate": 0.7194244604316546
+        },
+        {
+          "customers": 278,
+          "mean_probability": 0.9785406105155208,
+          "event_rate": 0.8920863309352518
+        }
+      ],
+      "paired_brier_vs_recency_bins": {
+        "metric": "brier",
+        "candidate_minus_baseline": -0.04000285414636868,
+        "ci95": [
+          -0.046041324161217353,
+          -0.034360494597173954
+        ],
+        "resamples": 1000
+      },
+      "ph_rank_p_values": {
+        "log_monetary_value": 0.1868534073674063,
+        "log_n_orders": 0.731573772561087,
+        "log_product_diversity": 0.5651173945961363,
+        "recency_from_cutoff": 2.139985540970804e-06,
+        "tenure_days": 9.30529488141653e-07
+      },
+      "coefficients": {
+        "log_n_orders": -0.5820178494124612,
+        "log_monetary_value": -0.03422868996825998,
+        "log_product_diversity": -0.1472786365449851,
+        "recency_from_cutoff": 0.025715830150904374,
+        "tenure_days": 0.006939637498293094
+      }
+    }
+  }
+}

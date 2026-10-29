@@ -3,6 +3,8 @@ import numpy as np
 from datetime import datetime
 from lifetimes import BetaGeoFitter
 from typing import Union
+import hashlib
+from .time_utils import cutoff_timestamp
 
 
 def compute_erl_days(
@@ -26,9 +28,10 @@ def compute_erl_days(
     - Still simulates future latent dropout after purchases (dropout coin flip).
       If latent dropout occurs at time t (after a purchase), observed churn is t + INACTIVITY_DAYS.
     """
-    rng = np.random.default_rng(seed)
+    if INACTIVITY_DAYS <= 0 or N < 2 or max_days <= 0:
+        raise ValueError("Require positive inactivity/max_days and N >= 2")
 
-    cutoff_date = pd.to_datetime(cutoff_date)
+    cutoff_date = cutoff_timestamp(cutoff_date)
     df = customer_summary_df.copy()
 
     # 1) last_purchase_age_days
@@ -41,6 +44,10 @@ def compute_erl_days(
     # 2) Already churned by business rule => ERL=0
     already_inactive = df["last_purchase_age_days"] >= INACTIVITY_DAYS
     df["ERL_days"] = 0.0
+    df["ERL_simulated_if_alive"] = 0.0
+    df["ERL_mc_se"] = 0.0
+    df["simulation_cap_fraction"] = 0.0
+    df["restriction_days"] = max_days
 
     # 3) P(alive at cutoff) from BG/NBD
     # (lifetimes accepts array-like)
@@ -53,7 +60,7 @@ def compute_erl_days(
     active_mask = ~already_inactive
     active_df = df.loc[active_mask].copy()
     if active_df.empty:
-        return df[["customer_id", "ERL_days", "prob_alive", "last_purchase_age_days"]]
+        return df[["customer_id", "ERL_days", "prob_alive", "last_purchase_age_days", "ERL_simulated_if_alive", "ERL_mc_se", "simulation_cap_fraction", "restriction_days"]]
 
     # BG/NBD hyperparameters
     r = float(bgf.params_["r"])
@@ -63,9 +70,14 @@ def compute_erl_days(
 
     erl_list = []
     erl_if_alive_list = []  # optional diagnostic
+    se_list = []
+    cap_list = []
 
     # Iterate customers; vectorize across N simulations per customer
     for _, row in active_df.iterrows():
+        # Stable streams make customer estimates independent of input order/subsets.
+        customer_seed = int.from_bytes(hashlib.sha256(f"{seed}:{row['customer_id']}".encode()).digest()[:8], "little")
+        rng = np.random.default_rng(customer_seed)
         freq = float(row["frequency"])
         T = float(row["T"])
         current_age = float(row["last_purchase_age_days"])
@@ -86,16 +98,19 @@ def compute_erl_days(
         if not np.any(active_sims):
             erl_list.append(times.mean())
             erl_if_alive_list.append(0.0)
+            se_list.append(0.0)
+            cap_list.append(float(dead_churn_time >= max_days))
+            erl_list[-1] = min(erl_list[-1], max_days)
             continue
 
         # ---- B) Sample per-path parameters for the alive sims ----
-        # Purchase rate (heuristic posterior draw)
+        # Conditional on being alive at T: Gamma(r+x, alpha+T).
         lambdas = np.empty(N, dtype=float)
         lambdas[active_sims] = rng.gamma(shape=r + freq, scale=1.0 / (alpha + T), size=active_sims.sum())
 
         # Dropout probability per path
-        # NOTE: Beta(a, b+freq) is a *heuristic* that shrinks dropout lower for frequent buyers.
-        # If you want strict BG/NBD without this heuristic, use rng.beta(a, b, size=...) instead.
+        # Conditional on being alive at T: Beta(a, b+x), since all x repeat
+        # purchases survived dropout. These independent draws follow BG/NBD.
         ps = np.empty(N, dtype=float)
         ps[active_sims] = rng.beta(a, b + freq, size=active_sims.sum())
 
@@ -142,6 +157,11 @@ def compute_erl_days(
                 active_sims[cap_idx] = False
 
         # ---- D) Aggregate ----
+        # Report E[min(time_to_inactivity, max_days)], a restricted mean.
+        # Cap EVERY stopping path, including inactivity and latent dropout.
+        cap_list.append(float(np.mean(times >= max_days)))
+        times = np.minimum(times, max_days)
+        se_list.append(float(times.std(ddof=1) / np.sqrt(N)))
         erl = float(times.mean())
         erl_list.append(erl)
 
@@ -153,5 +173,7 @@ def compute_erl_days(
 
     df.loc[active_mask, "ERL_days"] = erl_list
     df.loc[active_mask, "ERL_simulated_if_alive"] = erl_if_alive_list  # optional column
+    df.loc[active_mask, "ERL_mc_se"] = se_list
+    df.loc[active_mask, "simulation_cap_fraction"] = cap_list
 
-    return df[["customer_id", "ERL_days", "prob_alive", "last_purchase_age_days", "ERL_simulated_if_alive"]]
+    return df[["customer_id", "ERL_days", "prob_alive", "last_purchase_age_days", "ERL_simulated_if_alive", "ERL_mc_se", "simulation_cap_fraction", "restriction_days"]]

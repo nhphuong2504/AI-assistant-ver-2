@@ -17,6 +17,9 @@ from analytics.survival import (
     INACTIVITY_DAYS,
 )
 from analytics.monte_carlo import compute_erl_days
+from analytics.time_utils import cutoff_timestamp
+from analytics.landmark import first_inactivity_table
+from analytics.decision_service import retention_targets
 
 
 def _build_expected_lifetimes_df(
@@ -30,7 +33,7 @@ def _build_expected_lifetimes_df(
     rfm = clv_result.rfm
     df = df.copy()
     df["invoice_date"] = pd.to_datetime(df["invoice_date"])
-    cutoff_dt = pd.to_datetime(cutoff_date)
+    cutoff_dt = cutoff_timestamp(cutoff_date)
     last_purchases = (
         df[df["invoice_date"] <= cutoff_dt]
         .groupby("customer_id")["invoice_date"]
@@ -45,6 +48,7 @@ def _build_expected_lifetimes_df(
         customer_summary_df=customer_summary,
         cutoff_date=cutoff_date,
         INACTIVITY_DAYS=inactivity_days,
+        max_days=H_days,
     )
     expected_lifetimes = erl_result.merge(
         customer_summary[["customer_id", "T"]], on="customer_id", how="left"
@@ -72,6 +76,22 @@ class QueryRequest(BaseModel):
     limit: int = Field(500, ge=1, le=5000, description="Default LIMIT applied if SQL has none")
 
 
+class RetentionTargetsRequest(BaseModel):
+    cutoff_date: str = Field(CUTOFF_DATE, description="Observed scoring cutoff; fixed 90-day horizon")
+    contact_fraction: float = Field(.2, gt=0, le=1, description="Fraction of active customers within contact budget")
+
+
+@app.post("/retention/targets")
+def budgeted_retention_targets(req: RetentionTargetsRequest) -> Dict[str, Any]:
+    """Development-selected customer targeting; no future outcome fields."""
+    try:
+        return retention_targets(get_transactions_df(), req.cutoff_date, req.contact_fraction)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 class QueryResponse(BaseModel):
     columns: List[str]
     rows: List[Dict[str, Any]]
@@ -87,7 +107,7 @@ class AskLangChainResponse(BaseModel):
     answer: str
 
 class CLVRequest(BaseModel):
-    cutoff_date: str = Field("2011-09-30", description="Calibration cutoff date (YYYY-MM-DD)")
+    cutoff_date: str = Field(CUTOFF_DATE, description="Calibration cutoff date (YYYY-MM-DD)")
     horizon_days: int = Field(180, ge=1, le=3650)
     limit_customers: int = Field(5000, ge=10, le=200000)
 
@@ -228,27 +248,26 @@ def clv(req: CLVRequest) -> CLVResponse:
         "customers_with_repeat": int((pred["frequency"] > 0).sum()),
         "clv_mean": float(pred["clv"].mean(skipna=True)) if len(pred) > 0 else 0.0,  # Mean of all customers
         "clv_max": float(all_customers["clv"].max()) if len(all_customers) > 0 else 0.0,
+        "purchase_unit": "customer purchase-day",
+        "value_definition": "Expected gross positive sales in GBP, not profit or net revenue",
+        "calibration": "Unscaled; no holdout outcome-based calibration",
     }
 
     return CLVResponse(
         cutoff_date=req.cutoff_date,
         horizon_days=req.horizon_days,
-        top_customers=all_customers.to_dict(orient="records"),
+        top_customers=all_customers.astype(object).where(pd.notna(all_customers), None).to_dict(orient="records"),
         summary=summary,
     )
 
 
 @app.post("/survival/km", response_model=KMResponse)
-def km_all(inactivity_days: int = Query(INACTIVITY_DAYS, description="Inactivity days threshold for churn definition")) -> KMResponse:
+def km_all(inactivity_days: int = Query(INACTIVITY_DAYS, ge=1, description="Inactivity days threshold for churn definition")) -> KMResponse:
     """
     Fit Kaplan-Meier survival model on all customers.
     """
     df = get_transactions_df()
-    cov = build_covariate_table(
-        transactions=df,
-        cutoff_date=CUTOFF_DATE,
-        inactivity_days=inactivity_days,
-    ).df
+    cov = first_inactivity_table(df, CUTOFF_DATE, inactivity_days)
 
     kmf = fit_km_all(cov)
 
@@ -268,7 +287,7 @@ def km_all(inactivity_days: int = Query(INACTIVITY_DAYS, description="Inactivity
 
 @app.post("/survival/score", response_model=ScoreCustomersResponse)
 def score_customers_endpoint(
-    inactivity_days: int = Query(INACTIVITY_DAYS, description="Inactivity days threshold for churn definition"),
+    inactivity_days: int = Query(INACTIVITY_DAYS, ge=1, description="Inactivity days threshold for churn definition"),
     cutoff_date: str = Query(CUTOFF_DATE, description="Cutoff date for scoring (YYYY-MM-DD)"),
 ) -> ScoreCustomersResponse:
     """
@@ -307,9 +326,9 @@ def score_customers_endpoint(
 
 @app.post("/survival/churn-probability", response_model=ChurnProbabilityResponse)
 def churn_probability_endpoint(
-    inactivity_days: int = Query(INACTIVITY_DAYS, description="Inactivity days threshold for churn definition"),
+    inactivity_days: int = Query(INACTIVITY_DAYS, ge=1, description="Inactivity days threshold for churn definition"),
     cutoff_date: str = Query(CUTOFF_DATE, description="Cutoff date for prediction (YYYY-MM-DD)"),
-    X_days: int = Query(90, ge=1, le=3650, description="Prediction horizon in days"),
+    X_days: int = Query(90, ge=1, le=90, description="Prediction horizon within completed landmark follow-up"),
 ) -> ChurnProbabilityResponse:
     """
     Predict conditional churn probability for active customers.
@@ -336,6 +355,8 @@ def churn_probability_endpoint(
         "churn_probability_min": float(predictions["churn_probability"].min()),
         "survival_at_t0_mean": float(predictions["survival_at_t0"].mean()),
         "survival_at_t0_plus_X_mean": float(predictions["survival_at_t0_plus_X"].mean()),
+        "method": "Historical landmark Cox; time origin is the scoring cutoff",
+        "limitations": "Some proportional-hazards violations; probability calibration and seasonal transport remain imperfect",
     }
 
     return ChurnProbabilityResponse(
@@ -350,9 +371,9 @@ def churn_probability_endpoint(
 
 @app.post("/survival/expected-lifetime", response_model=ExpectedLifetimeResponse)
 def expected_lifetime_endpoint(
-    inactivity_days: int = Query(INACTIVITY_DAYS, description="Inactivity days threshold for churn definition"),
+    inactivity_days: int = Query(INACTIVITY_DAYS, ge=1, description="Inactivity days threshold for churn definition"),
     cutoff_date: str = Query(CUTOFF_DATE, description="Cutoff date for computation (YYYY-MM-DD)"),
-    H_days: int = Query(365, ge=1, le=3650, description="Horizon in days (nominal; reported in response)"),
+    H_days: int = Query(365, ge=1, le=3650, description="Restriction horizon for E[min(days until inactivity, H_days)]"),
 ) -> ExpectedLifetimeResponse:
     """
     Compute expected remaining lifetime in days (Monte Carlo, BG/NBD).
@@ -368,6 +389,7 @@ def expected_lifetime_endpoint(
         "expected_lifetime_max": float(expected_lifetimes["expected_remaining_life_days"].max()),
         "expected_lifetime_min": float(expected_lifetimes["expected_remaining_life_days"].min()),
         "t0_mean": float(expected_lifetimes["t0"].mean()),
+        "estimand": "Restricted mean days until next inactivity threshold; Monte Carlo SE excludes model uncertainty",
     }
 
     return ExpectedLifetimeResponse(
@@ -382,7 +404,7 @@ def expected_lifetime_endpoint(
 
 @app.post("/survival/segmentation", response_model=SegmentationResponse)
 def segmentation_endpoint(
-    inactivity_days: int = Query(INACTIVITY_DAYS, description="Inactivity days threshold for churn definition"),
+    inactivity_days: int = Query(INACTIVITY_DAYS, ge=1, description="Inactivity days threshold for churn definition"),
     cutoff_date: str = Query(CUTOFF_DATE, description="Cutoff date for segmentation (YYYY-MM-DD)"),
     H_days: int = Query(365, ge=1, le=3650, description="Horizon in days for expected remaining lifetime"),
 ) -> SegmentationResponse:
@@ -399,6 +421,8 @@ def segmentation_endpoint(
         transactions=df,
         covariates_df=cov,
         cutoff_date=cutoff_date,
+        inactivity_days=inactivity_days,
+        H_days=H_days,
     )
 
     # Create summary

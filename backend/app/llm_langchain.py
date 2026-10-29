@@ -28,6 +28,9 @@ from analytics.survival import (
     INACTIVITY_DAYS,
 )
 from analytics.monte_carlo import compute_erl_days
+from analytics.landmark import fit_landmark_cox
+from analytics.time_utils import cutoff_timestamp
+from analytics.decision_service import retention_targets
 from app.db import run_query, run_query_internal, get_schema, ensure_select_only
 from app.data import get_transactions_df, get_clv_models
 
@@ -92,13 +95,11 @@ def get_or_fit_cox_model(transactions_df: pd.DataFrame, cutoff_date: str, inacti
         inactivity_days=inactivity_days,
     ).df
     
-    cox_result = fit_cox_baseline(
-        covariates=cov,
-        covariate_cols=['n_orders', 'log_monetary_value', 'product_diversity'],
-        train_frac=1.0,
-        random_state=42,
-        penalizer=0.1,
-    )
+    model, historical_train = fit_landmark_cox(transactions_df, cutoff_date, inactivity_days)
+    model.inactivity_days_ = inactivity_days
+    cox_result = {"model": model, "summary": model.summary, "interpretation": None,
+        "flags": None, "n_train": len(historical_train), "n_validation": 0,
+        "n_dropped": 0, "validation_df": pd.DataFrame()}
     
     # Cache the model
     cache_cox_model(cache_key, cox_result['model'])
@@ -278,7 +279,7 @@ def predict_clv_tool(horizon_days: int = 90, limit_customers: int = 10, order: s
                 "mean_clv": float(pred['clv'].mean()),
                 "min_clv": float(pred['clv'].min()),
             },
-            "customers": pred[["customer_id", "clv", "pred_purchases", "monetary_value"]].to_dict(orient="records")
+            "customers": pred[["customer_id", "clv", "pred_purchases", "monetary_value"]].astype(object).where(pd.notna(pred), None).to_dict(orient="records")
         }
         
         if warning:
@@ -452,54 +453,21 @@ def predict_churn_probability_tool(X_days: int = 90, limit_customers: int = 10, 
 
 
 @tool
-def prioritize_retention_targets_tool(prediction_horizon: int = 90, limit_customers: int = 10, order: str = "descending") -> str:
-    """Prioritize ACTIVE customers for retention by combining CLV and churn probability into prioritize_score (clv * churn_prob). Use for action-oriented questions like who to contact/save first. Returns highest-impact retention targets ranked by business value at risk."""
+def prioritize_retention_targets_tool(prediction_horizon: int = 90, limit_customers: int = 10, order: str = "descending", contact_fraction: Optional[float] = None) -> str:
+    """Rank active customers with the development-selected policy (inactivity probability times recent gross sales). Supports a contact_fraction such as 0.2 for a 20% budget; returns budget count plus a capped display list. Fixed 90-day horizon. Historical sales exposure is not revenue saved, causal uplift or campaign ROI."""
     try:
-        transactions_df = get_transactions_df()
-        cutoff_date = CUTOFF_DATE
-        inactivity_days = INACTIVITY_DAYS
-
-        cox_result = get_or_fit_cox_model(transactions_df, cutoff_date, inactivity_days)
-
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in log")
-            models = get_clv_models(cutoff_date)
-            pred_unscaled = predict_clv(models, horizon_days=prediction_horizon, aov_fallback="global_mean")
-            pred_total_purchases = pred_unscaled["pred_purchases"].sum()
-            pred_total_revenue = pred_unscaled["clv"].sum(skipna=True)
-            target_purchases = pred_total_purchases * PURCHASE_SCALE if PURCHASE_SCALE != 1.0 else None
-            target_revenue = pred_total_revenue * REVENUE_SCALE if REVENUE_SCALE != 1.0 else None
-            clv_df = predict_clv(
-                models,
-                horizon_days=prediction_horizon,
-                scale_to_target_purchases=target_purchases,
-                scale_to_target_revenue=target_revenue,
-                aov_fallback="global_mean",
-            )
-
-        prioritized = prioritize_retention_targets(
-            model=cox_result["model"],
-            transactions=transactions_df,
-            clv_df=clv_df,
-            prediction_horizon=prediction_horizon,
-            cutoff_date=cutoff_date,
-            inactivity_days=inactivity_days,
-        )
-
-        prioritized = prioritized.sort_values("prioritize_score", ascending=(order == "ascending")).head(limit_customers)
-
-        result = {
-            "status": "success",
-            "total_customers": len(prioritized),
-            "prediction_horizon_days": prediction_horizon,
-            "summary": {
-                "mean_prioritize_score": float(prioritized["prioritize_score"].mean()),
-                "max_prioritize_score": float(prioritized["prioritize_score"].max()),
-                "min_prioritize_score": float(prioritized["prioritize_score"].min()),
-            },
-            "customers": prioritized[["customer_id", "clv", "churn_prob", "prioritize_score"]].to_dict(orient="records"),
-        }
-        return json.dumps(result, indent=2, default=str)
+        if prediction_horizon != 90:
+            raise ValueError("Validated decision policy supports a 90-day horizon only")
+        if order not in ("ascending", "descending") or not 1 <= limit_customers <= 5000:
+            raise ValueError("Require ascending/descending order and 1 <= limit_customers <= 5000")
+        result = retention_targets(get_transactions_df(), CUTOFF_DATE,
+            1.0 if contact_fraction is None else contact_fraction)
+        customers = pd.DataFrame(result.pop("customers"))
+        if len(customers):
+            customers = customers.sort_values("priority_rank", ascending=(order == "descending")).head(limit_customers)
+        result.update({"status": "success", "contacts_in_budget": result["contacts"],
+            "returned_customers": len(customers), "customers": customers.to_dict(orient="records")})
+        return json.dumps(result, indent=2, allow_nan=False)
     except Exception as e:
         return json.dumps({"status": "error", "error": str(e), "error_type": type(e).__name__})
 
@@ -516,7 +484,7 @@ def compute_erl_days_tool(limit_customers: int = 10, order: str = "descending", 
         rfm = clv_result.rfm
         transactions_df = transactions_df.copy()
         transactions_df["invoice_date"] = pd.to_datetime(transactions_df["invoice_date"])
-        cutoff_dt = pd.to_datetime(cutoff_date)
+        cutoff_dt = cutoff_timestamp(cutoff_date)
         last_purchases = (
             transactions_df[transactions_df["invoice_date"] <= cutoff_dt]
             .groupby("customer_id")["invoice_date"]
@@ -805,6 +773,8 @@ RESPONSE SYNTHESIS
 3. **Formatting:** Lists: Use concise bullet points for rankings or "Top N" requests. Avoid raw JSON or unformatted code dumps; present data in clean text or markdown tables.
 4. **Limited result sets:** When a tool returns a capped list (e.g. top 10 by default), and the user asked for a share of customers (e.g. "20%", "a subset", "who should we prioritize") without a specific number, describe the list explicitly as a subset: e.g. "Here are the **first 10** of the prioritized retention targets" or "Below are the **top 10** (you can ask for more if needed)." Do not say "here are the 10 customers to focus on" in a way that implies the full set is exactly 10.
 5. **Uncertainty framing:** For predictions (CLV, churn probability, ERL), describe outputs as model estimates with uncertainty. Prefer phrasing like "the model estimates X% probability" instead of deterministic claims.
+6. **Budget targeting:** For contact-budget questions call prioritize_retention_targets_tool with contact_fraction (for example 0.2 for 20%). Its development-selected policy weights predicted inactivity by historical spending, not CLV. Report contacts_in_budget separately from returned_customers.
+7. **Business limits:** CLV here estimates gross positive sales, not profit or net revenue. Retention scores are prioritization heuristics, not incremental revenue, causal uplift or proven ROI. Segment actions are untested hypotheses. ERL is a restricted simulated mean with parameter and model uncertainty; do not treat Monte Carlo error as full prediction uncertainty. Inactivity is reversible, not observed permanent customer death. Churn probabilities support at most 90 days; longer horizons require additional validation. The Cox PH assumption is violated for some features, so probabilities require caution even when ranking is useful.
 
 ========================
 DATA CONTEXT (CRITICAL)
